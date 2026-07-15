@@ -2,7 +2,7 @@
 //! (requires `data/`). Coordinates are located by scanning the loaded level
 //! rather than hard-coded, so the tests survive map-index changes.
 
-use wolf3d::game::{Game, Input};
+use wolf3d::game::{Game, GameScreen, Input};
 use wolf3d::hud::{KEY_GOLD, KEY_SILVER};
 use wolf3d::raycast::Bonus;
 
@@ -132,11 +132,12 @@ fn locked_door_needs_its_key() {
     );
 }
 
-/// (c) Using the elevator switch advances the floor and preserves score/lives,
-/// while keys reset for the new floor.
+/// (c) The elevator switch routes through the floor-completed intermission,
+/// then advances the floor preserving score/lives while keys reset.
 #[test]
 fn elevator_advances_level_and_preserves_score() {
     let mut game = Game::new(0);
+    // Game::new leaves show_load_screen off, so continuing skips Get Psyched.
     game.actors.list.clear();
 
     let (ex, ey, _) = find_tile(&game, |c| c == 21); // ELEVATORTILE
@@ -147,10 +148,19 @@ fn elevator_advances_level_and_preserves_score() {
     game.keys = KEY_GOLD; // proves keys reset on the next floor
     let before = game.level_idx;
 
+    // Using the switch enters the intermission (the floor is not yet advanced).
     game.update(DT, &Input { use_door: true, ..Default::default() });
+    assert_eq!(game.screen, GameScreen::Intermission, "elevator opens the intermission");
+    assert_eq!(game.level_idx, before, "the floor advances only after the intermission");
+    // The par/perfect-ratio bonus is awarded up front, on top of the carried score.
+    let carried = game.score;
+    assert!(carried >= 1234, "score must not be reset by completing the floor");
 
+    // Any key continues to the next floor.
+    game.update(DT, &Input { any_key: true, ..Default::default() });
+    assert_eq!(game.screen, GameScreen::Playing, "continuing resumes play (no load screen)");
     assert_eq!(game.level_idx, before + 1, "elevator should advance the floor");
-    assert_eq!(game.score, 1234, "score must carry across floors");
+    assert_eq!(game.score, carried, "score carries across floors (not reset)");
     assert_eq!(game.lives, 2, "lives must carry across floors");
     assert_eq!(game.keys, 0, "keys reset on the new floor");
 }

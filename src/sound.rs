@@ -171,6 +171,8 @@ pub const GUARD_DEATH_SCREAMS: [u8; 8] = [
 pub const CORNER_MUS: usize = 0;
 pub const DUNGEON_MUS: usize = 1;
 pub const WARMARCH_MUS: usize = 2;
+/// Played on the level-completed intermission (WL_INTER.C `ENDLEVEL_MUS`).
+pub const ENDLEVEL_MUS: usize = 5;
 pub const GETTHEM_MUS: usize = 3;
 pub const HEADACHE_MUS: usize = 4;
 pub const INTROCW3_MUS: usize = 6;

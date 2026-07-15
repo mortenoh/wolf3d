@@ -85,6 +85,15 @@ pub const N_0PIC: usize = 99;
 pub const FACE1APIC: usize = 109;
 pub const FACE8APIC: usize = 130;
 
+/// Intermission (WL_INTER.C LevelCompleted) art. The two BJ "breather" frames
+/// alternate; the big level-end digits are L_NUM0PIC..L_NUM0PIC+9.
+pub const L_GUYPIC: usize = 43;
+pub const L_NUM0PIC: usize = 45;
+pub const L_GUY2PIC: usize = 84;
+
+/// The "Get Psyched!" load screen bar art (GFXV_WL6.H GETPSYCHEDPIC).
+pub const GETPSYCHEDPIC: usize = 134;
+
 const NUM_NODES: usize = 256;
 const HUFF_ROOT: usize = 254;
 const ABSENT: u32 = 0x00FF_FFFF;

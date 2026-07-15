@@ -417,7 +417,8 @@ impl App {
         // while playing.
         let desired = match screen {
             GameScreen::Title => None,
-            GameScreen::Playing => Some(sound::song_for_level(level)),
+            GameScreen::Playing | GameScreen::GetPsyched => Some(sound::song_for_level(level)),
+            GameScreen::Intermission => Some(sound::ENDLEVEL_MUS),
             _ => Some(sound::MENU_SONG),
         };
         if desired != self.current_music {
@@ -635,6 +636,9 @@ fn main() {
     let demo_script = std::env::var("WOLF3D_DEMO").ok();
     let starts_at_menu =
         level_env.is_none() && demo_script.as_deref().is_none_or(|s| s.contains("key:"));
+    // The "Get Psyched!" load screen only runs in the plain windowed game; the
+    // demo and WOLF3D_LEVEL paths skip it (instant loads, deterministic runs).
+    game.show_load_screen = level_env.is_none() && demo_script.is_none();
     if starts_at_menu {
         game.to_title();
     }

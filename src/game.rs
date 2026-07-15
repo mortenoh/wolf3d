@@ -6,8 +6,9 @@ use crate::actors::{Actors, Kind};
 use crate::assets::{self, MapSet, VSwap, VgaGraph};
 use crate::fb::Framebuffer;
 use crate::hud::{self, Hud, HudState, KEY_GOLD, KEY_SILVER, VIEW_H};
+use crate::inter::{self, InterGfx, Intermission, LevelStats};
 use crate::menu::{self, Menu, MAIN_ITEMS};
-use crate::raycast::{self, Bonus, Player, World};
+use crate::raycast::{self, Bonus, ElevatorUse, Player, PushUse, World};
 use crate::savegame::{self, SaveError};
 use crate::sound as snd;
 
@@ -82,6 +83,11 @@ pub enum GameScreen {
     /// The Save Game slot list (and, when naming, the text entry over a slot).
     SaveGame,
     Playing,
+    /// The floor-completed intermission (WL_INTER.C LevelCompleted), shown after
+    /// the elevator before the next floor loads.
+    Intermission,
+    /// The brief "Get Psyched!" load screen shown while the next floor loads.
+    GetPsyched,
 }
 
 /// Skill level (WL_DEF.H `gd_*`). Controls enemy spawns (see
@@ -116,7 +122,21 @@ pub const WEAPON_MACHINEGUN: usize = 2;
 pub const WEAPON_CHAINGUN: usize = 3;
 
 /// The original tic rate, so `update` can express timings as fractional tics.
-const TIC: f32 = 1.0 / 70.0;
+pub const TIC: f32 = 1.0 / 70.0;
+
+/// How long the "Get Psyched!" load screen lingers (real/sim seconds) before the
+/// already-loaded floor starts. Loads are instant here, so this is purely cosmetic.
+const LOAD_SCREEN_SECS: f32 = 0.5;
+
+/// Whether a bonus static counts toward the floor's treasure total (WL_AGENT.C
+/// GetBonus increments `treasurecount` for these): the four valuables plus the
+/// one-up (`bo_fullheal`).
+fn is_treasure(bonus: Option<Bonus>) -> bool {
+    matches!(
+        bonus,
+        Some(Bonus::Cross | Bonus::Chalice | Bonus::Bible | Bonus::Crown | Bonus::FullHeal)
+    )
+}
 
 /// The boss whose death completes each episode's floor 9 (level index
 /// episode*10 + 8 in the WL6 map set). The real Hitler — not the mecha suit —
@@ -137,6 +157,16 @@ fn bonus_sound(bonus: Bonus) -> u8 {
         Bonus::Crown => snd::BONUS4SND as u8,
         Bonus::FullHeal => snd::BONUS1UPSND as u8,
     }
+}
+
+/// Count the floor's kill / secret / treasure totals at level setup (WL_GAME.C
+/// ScanInfoPlane): every live enemy spawned (corpses excluded), every plane-1
+/// PUSHABLETILE marker, and every treasure static.
+fn compute_stats(world: &World, actors: &Actors) -> LevelStats {
+    let kill_total = actors.list.iter().filter(|a| !a.dead).count() as i32;
+    let secret_total = world.level.plane1.iter().filter(|&&c| c == 98).count() as i32;
+    let treasure_total = world.statics.iter().filter(|s| is_treasure(s.bonus)).count() as i32;
+    LevelStats { kill_total, secret_total, treasure_total, ..Default::default() }
 }
 
 pub fn end_boss(level_idx: usize) -> Option<Kind> {
@@ -171,6 +201,19 @@ pub struct Game {
     pub player: Player,
     pub actors: Actors,
     pub level_idx: usize,
+
+    // --- Level stats + intermission (WL_INTER.C) ---
+    /// Kill / secret / treasure counters and elapsed time for the current floor.
+    pub stats: LevelStats,
+    /// Decoded intermission / load-screen art.
+    inter_gfx: InterGfx,
+    /// The active floor-completed intermission, if the screen is `Intermission`.
+    pub inter: Option<Intermission>,
+    /// Whether to show the "Get Psyched!" load screen between floors. Off for the
+    /// headless demo / `WOLF3D_LEVEL` paths so they are unaffected.
+    pub show_load_screen: bool,
+    /// Countdown clock while on the `GetPsyched` screen.
+    psyched_clock: f32,
 
     // --- Front-end / menu state ---
     pub screen: GameScreen,
@@ -244,6 +287,7 @@ impl Game {
             .unwrap_or_else(|e| panic!("failed to load VGAGRAPH from {dir:?}: {e}"));
         let hud = Hud::new(&vga);
         let menu = Menu::new(&vga);
+        let inter_gfx = InterGfx::new(&vga);
         // The tests and WOLF3D_LEVEL boot straight into a playable level at the
         // hardest skill (all difficulty tiers present), so keep that the default.
         let difficulty = Difficulty::Hard;
@@ -251,6 +295,7 @@ impl Game {
         let world = World::new(maps.level(level_idx));
         let player = raycast::find_spawn(&world.level);
         let actors = Actors::spawn_from_level(&world.level, difficulty.skill());
+        let stats = compute_stats(&world, &actors);
         Self {
             vswap,
             maps,
@@ -261,6 +306,11 @@ impl Game {
             player,
             actors,
             level_idx,
+            stats,
+            inter_gfx,
+            inter: None,
+            show_load_screen: false,
+            psyched_clock: 0.0,
             screen: GameScreen::Playing,
             difficulty,
             main_sel: 0,
@@ -304,11 +354,13 @@ impl Game {
         v
     }
 
-    /// Rebuild the current level's world, actors, and player start.
+    /// Rebuild the current level's world, actors, and player start, and recount
+    /// the floor's kill/secret/treasure totals (WL_GAME.C ScanInfoPlane).
     fn load_level(&mut self) {
         self.world = World::new(self.maps.level(self.level_idx));
         self.player = raycast::find_spawn(&self.world.level);
         self.actors = Actors::spawn_from_level(&self.world.level, self.difficulty.skill());
+        self.stats = compute_stats(&self.world, &self.actors);
         self.attacking = false;
         self.attack_frame = 0;
         self.weapon_frame = 0;
@@ -357,9 +409,79 @@ impl Game {
                 }
                 self.update_play(dt, input);
             }
+            GameScreen::Intermission => self.update_intermission(dt, input),
+            GameScreen::GetPsyched => self.update_get_psyched(dt),
         }
-        if !matches!(self.screen, GameScreen::Playing) {
+        // The menu cursor blink advances on the menu screens (not during play or
+        // the intermission / load screens, which run their own clocks).
+        if !matches!(
+            self.screen,
+            GameScreen::Playing | GameScreen::Intermission | GameScreen::GetPsyched
+        ) {
             self.menu.tick(dt);
+        }
+    }
+
+    // --- Intermission + load screen (WL_INTER.C) ---------------------------
+
+    /// Finish the current floor via the elevator: finalize its stats, award the
+    /// bonus, and enter the intermission (WL_INTER.C LevelCompleted). `secret`
+    /// routes to the episode's secret floor (floor 10) rather than the next one.
+    fn begin_intermission(&mut self, secret: bool) {
+        let time_sec = (self.stats.time as i32).min(99 * 60);
+        let par_sec = inter::par_seconds(self.level_idx);
+        let ratios = [
+            self.stats.kill_ratio(),
+            self.stats.secret_ratio(),
+            self.stats.treasure_ratio(),
+        ];
+        let (timeleft, bonus) = inter::compute_bonus(time_sec, par_sec, ratios[0], ratios[1], ratios[2]);
+        self.score += bonus; // GivePoints(bonus)
+
+        let n = self.maps.num_levels();
+        let next = if secret {
+            ((self.level_idx / 10) * 10 + 9).min(n - 1)
+        } else {
+            (self.level_idx + 1) % n
+        };
+        let floor = (self.level_idx % 10) as i32 + 1;
+        self.inter = Some(Intermission::new(
+            floor,
+            time_sec,
+            inter::par_string(self.level_idx),
+            ratios,
+            timeleft,
+            bonus,
+            next,
+        ));
+        self.screen = GameScreen::Intermission;
+        self.sounds.push(snd::LEVELDONESND as u8);
+    }
+
+    fn update_intermission(&mut self, dt: f32, input: &Input) {
+        if let Some(it) = self.inter.as_mut() {
+            let sounds = it.update(dt);
+            self.sounds.extend(sounds);
+        }
+        // Any key / fire / use continues to the next floor.
+        if input.any_key || input.menu_enter || input.fire || input.use_door {
+            let next = self.inter.take().map_or(self.level_idx, |it| it.next_level);
+            self.level_idx = next;
+            self.load_level();
+            self.keys = 0;
+            if self.show_load_screen {
+                self.psyched_clock = 0.0;
+                self.screen = GameScreen::GetPsyched;
+            } else {
+                self.screen = GameScreen::Playing;
+            }
+        }
+    }
+
+    fn update_get_psyched(&mut self, dt: f32) {
+        self.psyched_clock += dt;
+        if self.psyched_clock >= LOAD_SCREEN_SECS {
+            self.screen = GameScreen::Playing;
         }
     }
 
@@ -563,6 +685,8 @@ impl Game {
         w.put_u32(self.attack_frame as u32);
         w.put_f32(self.attack_count);
         w.put_u32(self.weapon_frame as u32);
+        // Per-floor stats (kills/secrets/treasure/time) persist across a save.
+        self.stats.save(&mut w);
         self.world.save(&mut w);
         self.actors.save(&mut w);
         w.buf
@@ -596,9 +720,12 @@ impl Game {
         self.attack_frame = r.get_u32()? as usize;
         self.attack_count = r.get_f32()?;
         self.weapon_frame = r.get_u32()? as usize;
+        let stats = LevelStats::load(&mut r)?;
         self.world.load(&mut r)?;
         self.actors.load(&mut r)?;
+        self.stats = stats;
 
+        self.inter = None;
         self.died = false;
         self.started = true;
         self.screen = GameScreen::Playing;
@@ -675,15 +802,26 @@ impl Game {
             self.weapon = w as usize;
         }
 
+        self.stats.time += dt;
         self.world.tick(dt, &self.player);
         if input.use_door {
-            // Cmd_Use: elevator switch completes the floor; otherwise a door.
-            if self.world.use_elevator(&self.player) {
-                self.sounds.push(snd::LEVELDONESND as u8);
-                self.next_level();
-                return;
+            // Cmd_Use (WL_AGENT.C): a secret push-wall first, then the elevator
+            // switch, then a door.
+            match self.world.use_pushwall(&self.player) {
+                PushUse::Activated => self.stats.secrets += 1,
+                PushUse::Blocked => {}
+                PushUse::NotPushwall => match self.world.use_elevator(&self.player) {
+                    ElevatorUse::Normal => {
+                        self.begin_intermission(false);
+                        return;
+                    }
+                    ElevatorUse::Secret => {
+                        self.begin_intermission(true);
+                        return;
+                    }
+                    ElevatorUse::None => self.world.use_door(&self.player, self.keys),
+                },
             }
-            self.world.use_door(&self.player, self.keys);
         }
 
         if input.turn_left {
@@ -756,6 +894,7 @@ impl Game {
         // boss die chain ends in A_StartDeathCam, which sets victoryflag and
         // plays the deathcam; here the flag is set straight from the kill).
         for kind in self.actors.take_deaths() {
+            self.stats.kills += 1;
             if Some(kind) == end_boss(self.level_idx) {
                 self.victory = true;
             }
@@ -927,15 +1066,17 @@ impl Game {
                 self.keys |= KEY_SILVER;
                 true
             }
-            Bonus::Cross => self.give_points(100),
-            Bonus::Chalice => self.give_points(500),
-            Bonus::Bible => self.give_points(1000),
-            Bonus::Crown => self.give_points(5000),
+            Bonus::Cross => self.take_treasure(100),
+            Bonus::Chalice => self.take_treasure(500),
+            Bonus::Bible => self.take_treasure(1000),
+            Bonus::Crown => self.take_treasure(5000),
             Bonus::FullHeal => {
-                // 1-up: full health, +25 ammo, +1 life.
+                // 1-up: full health, +25 ammo, +1 life. Counts as treasure
+                // (WL_AGENT.C GetBonus increments treasurecount for bo_fullheal).
                 self.health = 100;
                 self.ammo = (self.ammo + 25).min(99);
                 self.lives += 1;
+                self.stats.treasure += 1;
                 true
             }
         }
@@ -968,8 +1109,10 @@ impl Game {
         }
     }
 
-    fn give_points(&mut self, points: i32) -> bool {
+    /// A valuable pickup: score plus a treasure count (WL_AGENT.C GetBonus).
+    fn take_treasure(&mut self, points: i32) -> bool {
         self.score += points;
+        self.stats.treasure += 1;
         true
     }
 
@@ -1007,6 +1150,17 @@ impl Game {
                     self.entering_name,
                     &self.save_name,
                 );
+                return;
+            }
+            GameScreen::Intermission => {
+                if let Some(it) = &self.inter {
+                    self.inter_gfx.render_intermission(fb, it);
+                }
+                return;
+            }
+            GameScreen::GetPsyched => {
+                let progress = (self.psyched_clock / LOAD_SCREEN_SECS).clamp(0.0, 1.0);
+                self.inter_gfx.render_get_psyched(fb, progress);
                 return;
             }
             GameScreen::Playing => {}

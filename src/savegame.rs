@@ -3,11 +3,11 @@
 //! player, stats, doors, statics, every actor and projectile, and BOTH random
 //! streams — so loading resumes the simulation bit-identically, even mid-fight.
 //!
-//! ## Layout (version 1)
+//! ## Layout (version 2)
 //!
 //! ```text
 //! magic      "WOLF3DSV"        8 bytes
-//! version    u16               format version (1)
+//! version    u16               format version (2)
 //! name       u16 len + utf8    slot label shown in the menu
 //! level_idx  u32               overall level index (episode*10 + floor)
 //! difficulty u8                0 baby .. 3 hard
@@ -15,7 +15,9 @@
 //! player     f32 x, y, angle
 //! stats      i32 health, ammo, score, lives; u8 keys; u32 weapon
 //! victory    u8 bool
-//! world      doors (position + state), statics, blocking grid  (World::save)
+//! swing      attack anim (bool + frame/count/frame)
+//! levelstats kills/secrets/treasure counters + elapsed time     (LevelStats::save)
+//! world      doors, statics, blocking grid, push-wall, plane-0 diffs (World::save)
 //! actors     RNG indices, actor list, projectiles              (Actors::save)
 //! ```
 //!
@@ -27,8 +29,10 @@ use std::path::PathBuf;
 
 /// File magic: identifies a Wolf3D save.
 pub const MAGIC: &[u8; 8] = b"WOLF3DSV";
-/// Current on-disk format version.
-pub const VERSION: u16 = 1;
+/// Current on-disk format version. Bumped to 2 for the secrets + intermission
+/// milestone (per-floor stats, push-wall motion, plane-0 map edits); version-1
+/// saves are refused cleanly by [`read_header`].
+pub const VERSION: u16 = 2;
 /// Save slots exposed by the Load/Save menus.
 pub const NUM_SLOTS: usize = 10;
 

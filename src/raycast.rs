@@ -35,6 +35,33 @@ const DOOR_LAST: u16 = 101;
 /// Cmd_Use on it flips the switch (tile 21 -> 22) and completes the floor.
 const ELEVATOR_TILE: u16 = 21;
 const ELEVATOR_TILE_FLIPPED: u16 = 22;
+/// WL_DEF.H ALTELEVATORTILE: a floor marker the player stands on; using the
+/// elevator switch from here routes to the secret floor (ex_secretlevel).
+const ALT_ELEVATOR_TILE: u16 = 107;
+/// WL_DEF.H PUSHABLETILE: the plane-1 code marking a wall as a secret push-wall.
+const PUSHABLE_TILE: u16 = 98;
+
+/// The result of Cmd_Use against the tile the player faces (WL_AGENT.C Cmd_Use).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ElevatorUse {
+    /// Not an elevator switch — try a door instead.
+    None,
+    /// The normal level-exit switch: complete the floor.
+    Normal,
+    /// The switch used while standing on ALTELEVATORTILE: the secret exit.
+    Secret,
+}
+
+/// The result of Cmd_Use against a possible secret push-wall (WL_ACT1.C PushWall).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PushUse {
+    /// The faced tile is not a push-wall — fall through to the elevator/door.
+    NotPushwall,
+    /// A push-wall began sliding (bump the secret counter).
+    Activated,
+    /// The faced tile is a push-wall but it is blocked or already moving.
+    Blocked,
+}
 
 #[inline]
 fn is_wall(t: u16) -> bool {
@@ -273,6 +300,55 @@ pub struct StaticSprite {
     pub picked: bool,
 }
 
+// =============================================================================
+// PUSH-WALLS (secret doors) — WL_ACT1.C PushWall / MovePWalls
+// =============================================================================
+
+/// pwallstate crosses a multiple of this per tile moved (WL_ACT1.C: `oldblock =
+/// pwallstate/128`). A push-wall moves two tiles, so it finishes once
+/// pwallstate > 256 (2 * 128).
+const PWALL_BLOCK: f32 = 128.0;
+const PWALL_END: f32 = 256.0;
+
+/// A secret wall sliding two tiles in `dir`, rendered mid-slide and blocking
+/// until it stops (WL_ACT1.C PushWall/MovePWalls). Only one can move at a time,
+/// mirroring the original's single `pwallstate`.
+pub struct PushWall {
+    /// The tile the sliding face currently occupies (pwallx/pwally).
+    pub x: i32,
+    pub y: i32,
+    /// Push direction as a unit cardinal (dx, dy).
+    pub dx: i32,
+    pub dy: i32,
+    /// The wall tile value that slides (WL_ACT1.C `oldtile`).
+    tex: u16,
+    /// pwallstate, in tics (starts at 1 on activation; grows to > 256).
+    state: f32,
+}
+
+impl PushWall {
+    /// pwallpos normalized to a tile fraction: WL_ACT1.C `pwallpos =
+    /// (pwallstate/2)&63`, mapped to 0.0..1.0 of a tile along the push
+    /// direction. This is the visible slide offset.
+    pub fn offset(&self) -> f32 {
+        let pos = ((self.state / 2.0) as i32 & 63) as f32;
+        pos / 64.0
+    }
+}
+
+/// Snap a facing angle to the cardinal (dx, dy) the player is looking along, the
+/// octant test from WL_AGENT.C Cmd_Use (0 = +x east, +y is south).
+fn facing_cardinal(angle: f32) -> (i32, i32) {
+    use std::f32::consts::PI;
+    let a = angle.rem_euclid(2.0 * PI);
+    match ((a / (PI / 2.0)).round() as i32).rem_euclid(4) {
+        0 => (1, 0),  // east
+        1 => (0, 1),  // south
+        2 => (-1, 0), // west
+        _ => (0, -1), // north
+    }
+}
+
 pub struct World {
     pub level: Level,
     pub statics: Vec<StaticSprite>,
@@ -284,6 +360,11 @@ pub struct World {
     /// Tiles occupied by a live actor, republished each tic by the actor
     /// system; the player collides with these.
     pub actor_blocked: Vec<bool>,
+    /// The one active secret push-wall, if any (WL_ACT1.C pwallstate).
+    pub pushwall: Option<PushWall>,
+    /// The pristine plane-0 map, so a save can serialize only the tiles that
+    /// gameplay changed (push-walls opening, the elevator switch flipping).
+    plane0_orig: Vec<u16>,
     /// Sound-enum ids emitted by door activity this tic; drained by the game.
     pub sounds: Vec<u8>,
 }
@@ -332,7 +413,18 @@ impl World {
             }
         }
         let actor_blocked = vec![false; MAP_SIZE * MAP_SIZE];
-        Self { level, statics, doors, door_grid, blocked, actor_blocked, sounds: Vec::new() }
+        let plane0_orig = level.plane0.clone();
+        Self {
+            level,
+            statics,
+            doors,
+            door_grid,
+            blocked,
+            actor_blocked,
+            pushwall: None,
+            plane0_orig,
+            sounds: Vec::new(),
+        }
     }
 
     /// Drain the door sounds emitted since the last call.
@@ -372,6 +464,37 @@ impl World {
         for &b in &self.blocked {
             w.put_bool(b);
         }
+
+        // A moving secret push-wall (WL_ACT1.C pwallstate), so a save mid-slide
+        // resumes the animation exactly.
+        match &self.pushwall {
+            None => w.put_u8(0),
+            Some(pw) => {
+                w.put_u8(1);
+                w.put_i32(pw.x);
+                w.put_i32(pw.y);
+                w.put_i32(pw.dx);
+                w.put_i32(pw.dy);
+                w.put_u16(pw.tex);
+                w.put_f32(pw.state);
+            }
+        }
+
+        // Plane-0 tiles that gameplay changed vs. the pristine map (push-walls
+        // that have moved, the flipped elevator switch): serialize just the diff.
+        let diffs: Vec<(u32, u16)> = self
+            .level
+            .plane0
+            .iter()
+            .zip(&self.plane0_orig)
+            .enumerate()
+            .filter_map(|(i, (&now, &orig))| (now != orig).then_some((i as u32, now)))
+            .collect();
+        w.put_u32(diffs.len() as u32);
+        for (i, v) in diffs {
+            w.put_u32(i);
+            w.put_u16(v);
+        }
     }
 
     /// Restore door motion, statics and the blocking grid onto a world freshly
@@ -408,6 +531,31 @@ impl World {
         }
         for b in self.blocked.iter_mut() {
             *b = r.get_bool()?;
+        }
+
+        // A moving push-wall, then the plane-0 diffs onto the freshly rebuilt
+        // (pristine) map. The world was recreated from the level before load, so
+        // `plane0` currently equals `plane0_orig`; replay the changes on top.
+        self.pushwall = if r.get_u8()? != 0 {
+            Some(PushWall {
+                x: r.get_i32()?,
+                y: r.get_i32()?,
+                dx: r.get_i32()?,
+                dy: r.get_i32()?,
+                tex: r.get_u16()?,
+                state: r.get_f32()?,
+            })
+        } else {
+            None
+        };
+        let ndiffs = r.get_u32()? as usize;
+        for _ in 0..ndiffs {
+            let i = r.get_u32()? as usize;
+            let v = r.get_u16()?;
+            if i >= self.level.plane0.len() {
+                return Err(SaveError::BadEnum("plane0 diff index"));
+            }
+            self.level.plane0[i] = v;
         }
         Ok(())
     }
@@ -462,7 +610,7 @@ impl World {
         (idx != 0).then(|| &self.doors[idx as usize - 1])
     }
 
-    /// Advance door animations.
+    /// Advance door and push-wall animations.
     pub fn tick(&mut self, dt: f32, p: &Player) {
         let (px, py) = (p.x.floor() as i32, p.y.floor() as i32);
         for d in &mut self.doors {
@@ -470,6 +618,83 @@ impl World {
                 self.sounds.push(snd);
             }
         }
+        self.tick_pushwall(dt / crate::game::TIC);
+    }
+
+    /// MovePWalls (WL_ACT1.C): advance the active push-wall by `tics`. When
+    /// pwallstate crosses a 128-tic block boundary the wall hops one tile in its
+    /// push direction, leaving passable floor behind; after two tiles it stops.
+    fn tick_pushwall(&mut self, tics: f32) {
+        let Some(mut pw) = self.pushwall.take() else {
+            return;
+        };
+        let old_block = (pw.state / PWALL_BLOCK) as i32;
+        pw.state += tics;
+        if (pw.state / PWALL_BLOCK) as i32 != old_block {
+            // The tile the wall vacated becomes walkable floor.
+            self.level.plane0[pw.y as usize * MAP_SIZE + pw.x as usize] = 0;
+            // WL_ACT1.C tests `pwallstate > 256`; with our fixed one-tic step
+            // pwallstate lands exactly on 256, so we terminate at `>=` to keep
+            // the intended two-tile distance rather than pushing a third tile.
+            if pw.state >= PWALL_END {
+                return; // pushed two tiles: done (pw dropped -> inactive)
+            }
+            // Push one more tile, unless the tile ahead is blocked.
+            let (nx, ny) = (pw.x + pw.dx, pw.y + pw.dy);
+            let (ax, ay) = (nx + pw.dx, ny + pw.dy);
+            if self.pushwall_dest_blocked(ax, ay) {
+                return; // stop early (pw dropped -> inactive)
+            }
+            pw.x = nx;
+            pw.y = ny;
+            // The sliding face lives at (nx,ny); the tile ahead is solid so the
+            // ray always meets a wall while the slide is in progress.
+            self.level.plane0[ny as usize * MAP_SIZE + nx as usize] = pw.tex;
+            self.level.plane0[ay as usize * MAP_SIZE + ax as usize] = pw.tex;
+        }
+        self.pushwall = Some(pw);
+    }
+
+    /// A push-wall cannot move into a wall, an actor, or off the map.
+    fn pushwall_dest_blocked(&self, x: i32, y: i32) -> bool {
+        if x < 0 || y < 0 || x >= MAP_SIZE as i32 || y >= MAP_SIZE as i32 {
+            return true;
+        }
+        let idx = y as usize * MAP_SIZE + x as usize;
+        is_wall(self.level.plane0[idx]) || self.actor_blocked[idx]
+    }
+
+    /// Cmd_Use against a secret push-wall (WL_ACT1.C PushWall): if the faced tile
+    /// carries the plane-1 PUSHABLETILE marker on a wall, start it sliding two
+    /// tiles in the player's facing direction. Only one push-wall moves at a time.
+    pub fn use_pushwall(&mut self, p: &Player) -> PushUse {
+        let (dx, dy) = facing_cardinal(p.angle);
+        let tx = p.x.floor() as i32 + dx;
+        let ty = p.y.floor() as i32 + dy;
+        if tx < 0 || ty < 0 || tx >= MAP_SIZE as i32 || ty >= MAP_SIZE as i32 {
+            return PushUse::NotPushwall;
+        }
+        let idx = ty as usize * MAP_SIZE + tx as usize;
+        if self.level.plane1[idx] != PUSHABLE_TILE {
+            return PushUse::NotPushwall;
+        }
+        // A push-wall marker; from here on we never fall through to a door.
+        let tex = self.level.plane0[idx];
+        if self.pushwall.is_some() || !is_wall(tex) {
+            return PushUse::Blocked;
+        }
+        let (ax, ay) = (tx + dx, ty + dy);
+        if self.pushwall_dest_blocked(ax, ay) {
+            self.sounds.push(crate::sound::NOWAYSND as u8);
+            return PushUse::Blocked;
+        }
+        // Activate: drop the marker (so it can't retrigger), make the tile ahead
+        // solid, and start the slide with pwallstate = 1.
+        self.level.plane1[idx] = 0;
+        self.level.plane0[ay as usize * MAP_SIZE + ax as usize] = tex;
+        self.pushwall = Some(PushWall { x: tx, y: ty, dx, dy, tex, state: 1.0 });
+        self.sounds.push(crate::sound::PUSHWALLSND as u8);
+        PushUse::Activated
     }
 
     /// The use key: open/close the door in the tile the player faces. A locked
@@ -506,20 +731,28 @@ impl World {
     }
 
     /// Cmd_Use against the tile the player faces: if it is the elevator switch
-    /// (ELEVATORTILE), flip it (21 -> 22) and report the floor complete. The
-    /// caller advances the level (WL_AGENT.C Cmd_Use / `ex_completed`).
-    pub fn use_elevator(&mut self, p: &Player) -> bool {
-        let tx = (p.x + p.angle.cos()).floor() as i32;
-        let ty = (p.y + p.angle.sin()).floor() as i32;
+    /// (ELEVATORTILE), flip it (21 -> 22) and report the floor complete. Using it
+    /// while the player stands on ALTELEVATORTILE takes the secret exit
+    /// (WL_AGENT.C Cmd_Use / `ex_completed` vs `ex_secretlevel`).
+    pub fn use_elevator(&mut self, p: &Player) -> ElevatorUse {
+        let (dx, dy) = facing_cardinal(p.angle);
+        let tx = p.x.floor() as i32 + dx;
+        let ty = p.y.floor() as i32 + dy;
         if tx < 0 || ty < 0 || tx >= MAP_SIZE as i32 || ty >= MAP_SIZE as i32 {
-            return false;
+            return ElevatorUse::None;
         }
         let idx = ty as usize * MAP_SIZE + tx as usize;
-        if self.level.plane0[idx] == ELEVATOR_TILE {
-            self.level.plane0[idx] = ELEVATOR_TILE_FLIPPED;
-            return true;
+        if self.level.plane0[idx] != ELEVATOR_TILE {
+            return ElevatorUse::None;
         }
-        false
+        self.level.plane0[idx] = ELEVATOR_TILE_FLIPPED;
+        // The player's own tile decides normal vs. secret exit.
+        let ptile = p.y.floor() as usize * MAP_SIZE + p.x.floor() as usize;
+        if self.level.plane0[ptile] == ALT_ELEVATOR_TILE {
+            ElevatorUse::Secret
+        } else {
+            ElevatorUse::Normal
+        }
     }
 
     /// Collect a bonus static: stop it rendering and clear any block it held.
@@ -713,6 +946,22 @@ fn cast(world: &World, vswap: &VSwap, px: f32, py: f32, ray_x: f32, ray_y: f32) 
             continue;
         }
 
+        // A secret push-wall's sliding face: render it offset by its slide
+        // fraction along the push direction (WL_ACT1.C pwallpos). The tile is
+        // solid in plane0, so if the ray misses the offset face we skip the
+        // cell's solidity and march on to the (solid) tile ahead of it.
+        if let Some(pw) = world.pushwall.as_ref()
+            && map_x == pw.x
+            && map_y == pw.y
+        {
+            let exit = side_x.min(side_y);
+            if let Some(hit) = pushwall_slab_hit(pw, px, py, ray_x, ray_y, enter, exit) {
+                return hit;
+            }
+            prev_door = false;
+            continue;
+        }
+
         let t = tile(level, map_x, map_y);
         if is_wall(t) {
             let perp = enter.max(1e-4);
@@ -735,6 +984,55 @@ fn cast(world: &World, vswap: &VSwap, px: f32, py: f32, ray_x: f32, ray_y: f32) 
         }
         prev_door = false;
     }
+}
+
+/// Intersect a ray with a sliding push-wall's player-facing slab. The wall has
+/// slid `offset` of a tile in its push direction, so the face the player sees is
+/// its origin-side face pushed that far along the push axis. Returns a wall Hit
+/// when the ray crosses that face inside the cell.
+fn pushwall_slab_hit(
+    pw: &PushWall,
+    px: f32,
+    py: f32,
+    ray_x: f32,
+    ray_y: f32,
+    enter: f32,
+    exit: f32,
+) -> Option<Hit> {
+    let f = pw.offset();
+    let (tx, ty) = (pw.x as f32, pw.y as f32);
+    // The moving face is perpendicular to the push axis; `side_ns` follows the
+    // wall-shading convention (N/S faces take the light chunk).
+    let side_ns = pw.dy != 0;
+    // Plane coordinate along the push axis and the perpendicular hit coordinate.
+    let (slab_t, cross, tile_lo) = if pw.dx != 0 {
+        if ray_x == 0.0 {
+            return None;
+        }
+        let plane_x = if pw.dx > 0 { tx + f } else { tx + 1.0 - f };
+        let t = (plane_x - px) / ray_x;
+        (t, py + t * ray_y, ty)
+    } else {
+        if ray_y == 0.0 {
+            return None;
+        }
+        let plane_y = if pw.dy > 0 { ty + f } else { ty + 1.0 - f };
+        let t = (plane_y - py) / ray_y;
+        (t, px + t * ray_x, tx)
+    };
+    if !(slab_t.is_finite() && slab_t >= enter - 1e-6 && slab_t <= exit + 1e-6) {
+        return None;
+    }
+    if cross < tile_lo || cross > tile_lo + 1.0 {
+        return None;
+    }
+    let along = cross - tile_lo;
+    let mut tex_u = (along * TEX_SIZE as f32) as usize & (TEX_SIZE - 1);
+    if (!side_ns && ray_x > 0.0) || (side_ns && ray_y < 0.0) {
+        tex_u = TEX_SIZE - 1 - tex_u;
+    }
+    let texture = (pw.tex as usize - 1) * 2 + !side_ns as usize;
+    Some(Hit { perp: slab_t.max(1e-4), texture, tex_u })
 }
 
 /// Render the 3D view into the top `view_h` rows of the framebuffer, leaving

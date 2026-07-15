@@ -8,6 +8,7 @@ pub mod fb;
 pub mod font;
 pub mod game;
 pub mod hud;
+pub mod inter;
 pub mod menu;
 pub mod raycast;
 pub mod savegame;
