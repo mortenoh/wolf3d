@@ -17,3 +17,4 @@ pub mod raycast;
 pub mod savegame;
 pub mod sound;
 pub mod text;
+pub mod variant;

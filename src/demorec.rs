@@ -62,8 +62,13 @@ use crate::savegame::{Reader, SaveError, Writer};
 
 /// File magic: identifies a Wolf3D demo recording.
 pub const MAGIC: &[u8; 8] = b"WOLF3DDM";
-/// Current on-disk format version.
-pub const VERSION: u16 = 1;
+/// Current on-disk format version. Bumped to 2 to tag the game variant so a WL6
+/// demo is never replayed under Spear of Destiny (or vice versa).
+pub const VERSION: u16 = 2;
+
+/// Variant tag stored in the demo header: 0 = WL6, 1 = Spear of Destiny.
+pub const VAR_WL6: u8 = 0;
+pub const VAR_SOD: u8 = 1;
 
 // Per-tic flag bits (PACK).
 const F_FORWARD: u16 = 1 << 0;
@@ -82,6 +87,8 @@ const F_HAS_TURN_DELTA: u16 = 1 << 10;
 /// 70 Hz tic.
 #[derive(Clone, Default)]
 pub struct Demo {
+    /// Game variant this demo was recorded under ([`VAR_WL6`] / [`VAR_SOD`]).
+    pub variant: u8,
     pub level_idx: usize,
     pub difficulty: u8,
     pub rng_index: usize,
@@ -108,6 +115,7 @@ impl Demo {
     /// advanced the simulation) so the RNG indices and camera match the run.
     pub fn begin(game: &Game) -> Self {
         Self {
+            variant: if game.variant.is_sod() { VAR_SOD } else { VAR_WL6 },
             level_idx: game.level_idx,
             difficulty: game.difficulty.skill(),
             rng_index: game.actors.rng_index(),
@@ -135,6 +143,7 @@ impl Demo {
         let mut w = Writer::new();
         w.buf.extend_from_slice(MAGIC);
         w.put_u16(VERSION);
+        w.put_u8(self.variant);
         w.put_u32(self.level_idx as u32);
         w.put_u8(self.difficulty);
         w.put_u32(self.rng_index as u32);
@@ -162,9 +171,12 @@ impl Demo {
             return Err(SaveError::BadMagic);
         }
         let version = r.get_u16()?;
-        if version != VERSION {
-            return Err(SaveError::BadVersion(version));
-        }
+        // Version 1 predates the variant tag; those demos are all WL6.
+        let variant = match version {
+            1 => VAR_WL6,
+            2 => r.get_u8()?,
+            v => return Err(SaveError::BadVersion(v)),
+        };
         let level_idx = r.get_u32()? as usize;
         let difficulty = r.get_u8()?;
         let rng_index = r.get_u32()? as usize;
@@ -184,6 +196,7 @@ impl Demo {
             tics.push(unpack_input(&mut r)?);
         }
         Ok(Self {
+            variant,
             level_idx,
             difficulty,
             rng_index,

@@ -131,10 +131,16 @@ pub struct VgaGraph {
 }
 
 impl VgaGraph {
+    /// Load the WL6 archive (the default variant).
     pub fn load(dir: &Path) -> std::io::Result<Self> {
-        let dict_bytes = std::fs::read(dir.join("VGADICT.WL6"))?;
-        let head_bytes = std::fs::read(dir.join("VGAHEAD.WL6"))?;
-        let graph = std::fs::read(dir.join("VGAGRAPH.WL6"))?;
+        Self::load_ext(dir, "WL6")
+    }
+
+    /// Load the VGAGRAPH archive for a given data-file extension (`WL6` / `SOD`).
+    pub fn load_ext(dir: &Path, ext: &str) -> std::io::Result<Self> {
+        let dict_bytes = std::fs::read(dir.join(format!("VGADICT.{ext}")))?;
+        let head_bytes = std::fs::read(dir.join(format!("VGAHEAD.{ext}")))?;
+        let graph = std::fs::read(dir.join(format!("VGAGRAPH.{ext}")))?;
 
         let mut dict = [[0u16; 2]; NUM_NODES];
         for (i, node) in dict.iter_mut().enumerate() {
@@ -190,8 +196,17 @@ impl VgaGraph {
         self.expand_chunk(chunk)
     }
 
-    /// Decode a picture chunk to a row-major RGBA [`Picture`].
+    /// Decode a picture chunk to a row-major RGBA [`Picture`] using the standard
+    /// game palette.
     pub fn pic(&self, chunk: usize) -> Picture {
+        self.pic_with_palette(chunk, &PALETTE)
+    }
+
+    /// Decode a picture chunk with an explicit 256-color palette. Spear of
+    /// Destiny's title and end screens use custom palettes (TITLEPALETTE etc.)
+    /// rather than the in-game GAMEPAL, so those pics come out scrambled under
+    /// [`Self::pic`]; decode them with [`Self::load_vga_palette`] instead.
+    pub fn pic_with_palette(&self, chunk: usize, palette: &[u32; 256]) -> Picture {
         let (width, height) = self.pictable[chunk - STARTPICS];
         let planar = self.expand_chunk(chunk);
         let mut pixels = vec![0u32; width * height];
@@ -200,10 +215,24 @@ impl VgaGraph {
             for x in 0..width {
                 let idx = (y * width + x) >> 2;
                 let byte = planar[(x & 3) * plane_len + idx];
-                pixels[y * width + x] = PALETTE[byte as usize];
+                pixels[y * width + x] = palette[byte as usize];
             }
         }
         Picture { width, height, pixels }
+    }
+
+    /// Read a raw VGA palette chunk (768 bytes = 256 * RGB, 6-bit DAC values) into
+    /// packed framebuffer colors. Used for SOD's TITLEPALETTE.
+    pub fn load_vga_palette(&self, chunk: usize) -> [u32; 256] {
+        let raw = self.expand_chunk(chunk);
+        let mut pal = [PALETTE[0]; 256];
+        if raw.len() >= 768 {
+            for (i, slot) in pal.iter_mut().enumerate() {
+                let c6 = |v: u8| (v as u32 * 255 / 63) as u8;
+                *slot = crate::fb::rgb(c6(raw[i * 3]), c6(raw[i * 3 + 1]), c6(raw[i * 3 + 2]));
+            }
+        }
+        pal
     }
 }
 

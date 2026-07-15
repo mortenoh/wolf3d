@@ -7,12 +7,10 @@
 //! call `StatusDrawPic(x, y, pic)` lands at pixel `(x * 8, y + VIEW_H)`. HUD
 //! numbers are 8px-wide digit pics stepped one byte-cell apart.
 
-use crate::assets::vgagraph::{
-    self, FACE1APIC, FACE8APIC, GOLDKEYPIC, N_0PIC, NOKEYPIC, SILVERKEYPIC, STATUSBARPIC,
-    VgaGraph,
-};
+use crate::assets::vgagraph::{self, VgaGraph};
 use crate::assets::vswap::{TEX_SIZE, VSwap};
 use crate::fb::{Framebuffer, WIDTH};
+use crate::variant::Gfx;
 
 /// The 3D view occupies the top rows; the status bar fills the rest.
 pub const VIEW_H: usize = 160;
@@ -44,17 +42,22 @@ pub struct Hud {
     no_key: vgagraph::Picture,
     gold_key: vgagraph::Picture,
     silver_key: vgagraph::Picture,
+    /// FACE1APIC chunk number for the current variant (faces are indexed from it).
+    face1a: usize,
+    face8a: usize,
 }
 
 impl Hud {
-    pub fn new(vga: &VgaGraph) -> Self {
+    pub fn new(vga: &VgaGraph, gfx: &Gfx) -> Self {
         Self {
-            statusbar: vga.pic(STATUSBARPIC),
-            digits: (0..10).map(|d| vga.pic(N_0PIC + d)).collect(),
-            faces: (FACE1APIC..=FACE8APIC).map(|c| vga.pic(c)).collect(),
-            no_key: vga.pic(NOKEYPIC),
-            gold_key: vga.pic(GOLDKEYPIC),
-            silver_key: vga.pic(SILVERKEYPIC),
+            statusbar: vga.pic(gfx.statusbar),
+            digits: (0..10).map(|d| vga.pic(gfx.n_0 + d)).collect(),
+            faces: (gfx.face1a..=gfx.face8a).map(|c| vga.pic(c)).collect(),
+            no_key: vga.pic(gfx.no_key),
+            gold_key: vga.pic(gfx.gold_key),
+            silver_key: vga.pic(gfx.silver_key),
+            face1a: gfx.face1a,
+            face8a: gfx.face8a,
         }
     }
 
@@ -93,11 +96,11 @@ impl Hud {
     fn face(&self, fb: &mut Framebuffer, health: i32) {
         let pic = if health > 0 {
             let bracket = ((100 - health.min(100)) / 16) as usize; // 0..=6
-            FACE1APIC + 3 * bracket + 1
+            self.face1a + 3 * bracket + 1
         } else {
-            FACE8APIC // death face
+            self.face8a // death face
         };
-        blit(fb, &self.faces[pic - FACE1APIC], 17 * CELL, 4 + BAR_TOP);
+        blit(fb, &self.faces[pic - self.face1a], 17 * CELL, 4 + BAR_TOP);
     }
 
     /// DrawKeys: gold slot (top), silver slot (bottom); blank when not held.

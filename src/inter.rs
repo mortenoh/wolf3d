@@ -9,9 +9,7 @@
 //! (any key) never changes the total.
 
 use crate::assets::palette::PALETTE;
-use crate::assets::vgagraph::{
-    self, Picture, GETPSYCHEDPIC, HIGHSCORESPIC, L_BJWINSPIC, L_GUY2PIC, L_GUYPIC, L_NUM0PIC,
-};
+use crate::assets::vgagraph::{self, Picture};
 use crate::assets::VgaGraph;
 use crate::fb::{Framebuffer, HEIGHT, WIDTH};
 use crate::font::Font;
@@ -264,14 +262,14 @@ pub struct InterGfx {
 }
 
 impl InterGfx {
-    pub fn new(vga: &VgaGraph) -> Self {
+    pub fn new(vga: &VgaGraph, gfx: &crate::variant::Gfx) -> Self {
         Self {
             font: Font::load(vga, 0),
-            guy: [vga.pic(L_GUYPIC), vga.pic(L_GUY2PIC)],
-            nums: (0..10).map(|d| vga.pic(L_NUM0PIC + d)).collect(),
-            psyched: vga.pic(GETPSYCHEDPIC),
-            bjwin: vga.pic(L_BJWINSPIC),
-            highscores: vga.pic(HIGHSCORESPIC),
+            guy: [vga.pic(gfx.l_guy), vga.pic(gfx.l_guy2)],
+            nums: (0..10).map(|d| vga.pic(gfx.l_num0 + d)).collect(),
+            psyched: vga.pic(gfx.get_psyched),
+            bjwin: vga.pic(gfx.l_bjwins),
+            highscores: vga.pic(gfx.high_scores),
         }
     }
 

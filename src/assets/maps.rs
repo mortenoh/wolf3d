@@ -34,9 +34,15 @@ fn i32at(b: &[u8], i: usize) -> i32 {
 }
 
 impl MapSet {
+    /// Load the WL6 map set (the default variant).
     pub fn load(dir: &Path) -> std::io::Result<Self> {
-        let maphead = std::fs::read(dir.join("MAPHEAD.WL6"))?;
-        let gamemaps = std::fs::read(dir.join("GAMEMAPS.WL6"))?;
+        Self::load_ext(dir, "WL6")
+    }
+
+    /// Load the GAMEMAPS/MAPHEAD map set for a given extension (`WL6` / `SOD`).
+    pub fn load_ext(dir: &Path, ext: &str) -> std::io::Result<Self> {
+        let maphead = std::fs::read(dir.join(format!("MAPHEAD.{ext}")))?;
+        let gamemaps = std::fs::read(dir.join(format!("GAMEMAPS.{ext}")))?;
         let rlew_tag = u16at(&maphead, 0);
         let offsets = (0..NUM_MAPS)
             .map(|i| i32at(&maphead, 2 + i * 4))

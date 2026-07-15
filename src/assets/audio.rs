@@ -51,9 +51,23 @@ pub struct AudioData {
 }
 
 impl AudioData {
+    /// Load the WL6 audio archive (the default variant).
     pub fn load(dir: &Path) -> std::io::Result<Self> {
-        let head = std::fs::read(dir.join("AUDIOHED.WL6"))?;
-        let audiot = std::fs::read(dir.join("AUDIOT.WL6"))?;
+        Self::load_ext(dir, "WL6")
+    }
+
+    /// Load AUDIOHED/AUDIOT for a given extension (`WL6` / `SOD`).
+    ///
+    /// Spear of Destiny reorders its sound enum and uses different bank offsets
+    /// (AUDIOSOD.H: STARTADLIBSOUNDS 81, STARTMUSIC 243, 24 songs). The game
+    /// engine always emits WL6 sound-enum ids, so the SOD path indexes its AdLib
+    /// effects by a WL6->SOD name remap ([`sod_sfx_remap`]) — a WL6 id lands on
+    /// the SOD chunk of the same name, or `None` when SOD has no such effect.
+    /// Songs are indexed directly by the SOD music enum. Digitized playback is
+    /// disabled for SOD (adlib-only) — the SOD DigiMap is not modeled.
+    pub fn load_ext(dir: &Path, ext: &str) -> std::io::Result<Self> {
+        let head = std::fs::read(dir.join(format!("AUDIOHED.{ext}")))?;
+        let audiot = std::fs::read(dir.join(format!("AUDIOT.{ext}")))?;
 
         // AUDIOHED is a plain u32 offset table (chunks + 1 terminator).
         let offsets: Vec<usize> = head
@@ -72,19 +86,103 @@ impl AudioData {
             &audiot[a..b]
         };
 
+        let sod = ext.eq_ignore_ascii_case("SOD");
+        // Bank offsets differ per variant.
+        let (start_adlib, start_music, num_music) =
+            if sod { (81usize, 243usize, 24usize) } else { (START_ADLIB_SOUNDS, START_MUSIC, NUM_MUSIC) };
+
+        // The sfx vec is always indexed by the WL6 sound-enum id the engine emits.
         let mut sfx = Vec::with_capacity(NUM_SOUNDS);
-        for s in 0..NUM_SOUNDS {
-            sfx.push(parse_adlib(chunk(START_ADLIB_SOUNDS + s)));
+        for wl6 in 0..NUM_SOUNDS {
+            let bank_id = if sod { sod_sfx_remap(wl6) } else { Some(wl6) };
+            sfx.push(bank_id.and_then(|id| parse_adlib(chunk(start_adlib + id))));
         }
 
-        let mut music = Vec::with_capacity(NUM_MUSIC);
-        for m in 0..NUM_MUSIC {
-            let idx = START_MUSIC + m;
+        let mut music = Vec::with_capacity(num_music);
+        for m in 0..num_music {
+            let idx = start_music + m;
             music.push(if idx < num_chunks { parse_imf(chunk(idx)) } else { Vec::new() });
         }
 
-        Ok(Self { sfx, music, digi_map: build_digi_map() })
+        let digi_map = if sod { [-1i32; NUM_SOUNDS] } else { build_digi_map() };
+        Ok(Self { sfx, music, digi_map })
     }
+}
+
+/// Map a WL6 sound-enum id to the SOD AdLib-effect index of the same name
+/// (AUDIOSOD.H `soundnames`), or `None` when Spear has no matching effect. Built
+/// by matching enum names; WL6-only speech (Mutti, Die, Eva, …) has no SOD
+/// counterpart and drops silent.
+fn sod_sfx_remap(wl6: usize) -> Option<usize> {
+    use crate::sound as s;
+    Some(match wl6 {
+        s::HITWALLSND => 0,
+        s::SELECTITEMSND => 2,
+        s::MOVEGUN2SND => 4,
+        s::MOVEGUN1SND => 5,
+        s::NOWAYSND => 6,
+        s::NAZIHITPLAYERSND => 7,
+        s::PLAYERDEATHSND => 9,
+        s::DOGDEATHSND => 10,
+        s::ATKGATLINGSND => 11,
+        s::GETKEYSND => 12,
+        s::NOITEMSND => 13,
+        s::WALK1SND => 14,
+        s::WALK2SND => 15,
+        s::TAKEDAMAGESND => 16,
+        s::GAMEOVERSND => 17,
+        s::OPENDOORSND => 18,
+        s::CLOSEDOORSND => 19,
+        s::DONOTHINGSND => 20,
+        s::HALTSND => 21,
+        s::DEATHSCREAM2SND => 22,
+        s::ATKKNIFESND => 23,
+        s::ATKPISTOLSND => 24,
+        s::DEATHSCREAM3SND => 25,
+        s::ATKMACHINEGUNSND => 26,
+        s::HITENEMYSND => 27,
+        s::SHOOTDOORSND => 28,
+        s::DEATHSCREAM1SND => 29,
+        s::GETMACHINESND => 30,
+        s::GETAMMOSND => 31,
+        s::SHOOTSND => 32,
+        s::HEALTH1SND => 33,
+        s::HEALTH2SND => 34,
+        s::BONUS1SND => 35,
+        s::BONUS2SND => 36,
+        s::BONUS3SND => 37,
+        s::GETGATLINGSND => 38,
+        s::ESCPRESSEDSND => 39,
+        s::LEVELDONESND => 40,
+        s::DOGBARKSND => 41,
+        s::ENDBONUS1SND => 42,
+        s::ENDBONUS2SND => 43,
+        s::BONUS1UPSND => 44,
+        s::BONUS4SND => 45,
+        s::PUSHWALLSND => 46,
+        s::NOBONUSSND => 47,
+        s::PERCENT100SND => 48,
+        s::BOSSACTIVESND => 49,
+        s::SCHUTZADSND => 51,
+        s::AHHHGSND => 52,
+        s::LEBENSND => 56,
+        s::NAZIFIRESND => 58,
+        s::BOSSFIRESND => 59,
+        s::SSFIRESND => 60,
+        s::SLURPIESND => 61,
+        s::SPIONSND => 66,
+        s::NEINSOVASSND => 67,
+        s::DOGATTACKSND => 68,
+        s::DEATHSCREAM4SND => 50,
+        s::DEATHSCREAM5SND => 53,
+        s::DEATHSCREAM6SND => 57,
+        s::DEATHSCREAM7SND => 54,
+        s::DEATHSCREAM8SND => 55,
+        s::DEATHSCREAM9SND => 63,
+        s::MISSILEFIRESND => 8,
+        s::MISSILEHITSND => 1,
+        _ => return None,
+    })
 }
 
 /// Parse an `AdLibSound`: 4-byte length, 2-byte priority, 16-byte instrument,

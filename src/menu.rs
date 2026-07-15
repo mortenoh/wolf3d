@@ -9,11 +9,7 @@
 //! (`TEXTCOLOR`, brighter `HIGHLIGHT` under the gun), and disabled items are the
 //! dark-red `DEACTIVE`.
 
-use crate::assets::vgagraph::{
-    Picture, C_BABYMODEPIC, C_CURSOR1PIC, C_CURSOR2PIC, C_EPISODE1PIC, C_FXTITLEPIC, C_LOADGAMEPIC,
-    C_MUSICTITLEPIC, C_NOTSELECTEDPIC, C_OPTIONSPIC, C_SAVEGAMEPIC, C_SELECTEDPIC, CREDITSPIC,
-    TITLEPIC,
-};
+use crate::assets::vgagraph::Picture;
 use crate::assets::VgaGraph;
 use crate::fb::{Framebuffer, HEIGHT, WIDTH};
 use crate::font::Font;
@@ -115,6 +111,9 @@ const DIFFICULTY_NAMES: [&str; NUM_DIFFICULTIES] = [
 pub struct Menu {
     font: Font,
     title: Picture,
+    /// SOD's title screen is two stacked halves (TITLE1PIC top, TITLE2PIC
+    /// bottom); `None` for WL6's single title pic.
+    title_bottom: Option<Picture>,
     options: Picture,
     cursor: [Picture; 2],
     episodes: Vec<Picture>,
@@ -132,18 +131,32 @@ pub struct Menu {
 }
 
 impl Menu {
-    pub fn new(vga: &VgaGraph) -> Self {
+    pub fn new(vga: &VgaGraph, variant: &crate::variant::Variant) -> Self {
+        let gfx = &variant.gfx;
+        let episodes = match gfx.episode1 {
+            Some(e1) => (0..NUM_EPISODES).map(|e| vga.pic(e1 + e)).collect(),
+            None => Vec::new(),
+        };
+        // SOD's title uses a custom palette (TITLEPALETTE); WL6 uses the game one.
+        let (title, title_bottom) = match gfx.title_palette {
+            Some(pal_chunk) => {
+                let pal = vga.load_vga_palette(pal_chunk);
+                (vga.pic_with_palette(gfx.title1, &pal), gfx.title2.map(|c| vga.pic_with_palette(c, &pal)))
+            }
+            None => (vga.pic(gfx.title1), gfx.title2.map(|c| vga.pic(c))),
+        };
         Self {
             font: Font::load(vga, 0),
-            title: vga.pic(TITLEPIC),
-            options: vga.pic(C_OPTIONSPIC),
-            cursor: [vga.pic(C_CURSOR1PIC), vga.pic(C_CURSOR2PIC)],
-            episodes: (0..NUM_EPISODES).map(|e| vga.pic(C_EPISODE1PIC + e)).collect(),
-            difficulty: (0..NUM_DIFFICULTIES).map(|d| vga.pic(C_BABYMODEPIC + d)).collect(),
-            radio: [vga.pic(C_NOTSELECTEDPIC), vga.pic(C_SELECTEDPIC)],
-            sound_titles: [vga.pic(C_FXTITLEPIC), vga.pic(C_MUSICTITLEPIC)],
-            ls_titles: [vga.pic(C_LOADGAMEPIC), vga.pic(C_SAVEGAMEPIC)],
-            credits: vga.pic(CREDITSPIC),
+            title,
+            title_bottom,
+            options: vga.pic(gfx.options),
+            cursor: [vga.pic(gfx.cursor1), vga.pic(gfx.cursor2)],
+            episodes,
+            difficulty: (0..NUM_DIFFICULTIES).map(|d| vga.pic(gfx.baby_mode + d)).collect(),
+            radio: [vga.pic(gfx.not_selected), vga.pic(gfx.selected)],
+            sound_titles: [vga.pic(gfx.fx_title), vga.pic(gfx.music_title)],
+            ls_titles: [vga.pic(gfx.load_game), vga.pic(gfx.save_game)],
+            credits: vga.pic(gfx.credits),
             blink: 0.0,
         }
     }
@@ -161,9 +174,13 @@ impl Menu {
 
     // --- Screens ----------------------------------------------------------
 
-    /// TITLEPIC, full screen.
+    /// The title screen: one full-screen pic (WL6), or the two stacked halves
+    /// TITLE1PIC/TITLE2PIC (SOD).
     pub fn render_title(&self, fb: &mut Framebuffer) {
         blit(fb, &self.title, 0, 0);
+        if let Some(bottom) = &self.title_bottom {
+            blit(fb, bottom, 0, self.title.height as i32);
+        }
     }
 
     /// CREDITSPIC, full screen (the attract-loop credits page).

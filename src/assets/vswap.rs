@@ -36,8 +36,14 @@ pub struct VSwap {
 }
 
 impl VSwap {
+    /// Load the WL6 page file (the default variant).
     pub fn load(dir: &Path) -> std::io::Result<Self> {
-        let data = std::fs::read(dir.join("VSWAP.WL6"))?;
+        Self::load_ext(dir, "WL6")
+    }
+
+    /// Load the VSWAP page file for a given data-file extension (`WL6` / `SOD`).
+    pub fn load_ext(dir: &Path, ext: &str) -> std::io::Result<Self> {
+        let data = std::fs::read(dir.join(format!("VSWAP.{ext}")))?;
         let u16at = |i: usize| u16::from_le_bytes([data[i], data[i + 1]]) as usize;
         let u32at = |i: usize| {
             u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize

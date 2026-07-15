@@ -232,9 +232,17 @@ pub enum Kind {
     Clyde,  // spawn code 225
     Pinky,  // spawn code 226
     Inky,   // spawn code 227
+    // Spear of Destiny bosses (WL_ACT2.C under SPEAR). Appended so the earlier
+    // save-game indices are unchanged.
+    Trans,   // transobj,   spawn code 125 (Trans Grosse, floor 5)
+    Uber,    // uberobj,    spawn code 142 (UberMutant,  floor 16)
+    Will,    // willobj,    spawn code 143 (Barnacle Wilhelm, floor 10)
+    Death,   // deathobj,   spawn code 161 (Death Knight, floor 18)
+    Angel,   // angelobj,   spawn code 107 (Angel of Death, floor 21)
+    Spectre, // spectreobj, spawn code 106 (translucent ghost)
 }
 
-const NUM_KINDS: usize = 17;
+const NUM_KINDS: usize = 23;
 
 impl Kind {
     fn index(self) -> usize {
@@ -256,6 +264,12 @@ impl Kind {
             Kind::Clyde => 14,
             Kind::Pinky => 15,
             Kind::Inky => 16,
+            Kind::Trans => 17,
+            Kind::Uber => 18,
+            Kind::Will => 19,
+            Kind::Death => 20,
+            Kind::Angel => 21,
+            Kind::Spectre => 22,
         }
     }
     /// Inverse of [`Kind::index`], for save-game decoding.
@@ -278,6 +292,12 @@ impl Kind {
             14 => Kind::Clyde,
             15 => Kind::Pinky,
             16 => Kind::Inky,
+            17 => Kind::Trans,
+            18 => Kind::Uber,
+            19 => Kind::Will,
+            20 => Kind::Death,
+            21 => Kind::Angel,
+            22 => Kind::Spectre,
             _ => return Err(SaveError::BadEnum("actor kind")),
         })
     }
@@ -286,6 +306,24 @@ impl Kind {
     /// cannot be shot or killed, and hurts on contact.
     pub fn is_ghost(self) -> bool {
         matches!(self, Kind::Blinky | Kind::Clyde | Kind::Pinky | Kind::Inky)
+    }
+
+    /// The SOD spectre (ghostobj under SPEAR): a shootable, low-hitpoint melee
+    /// ghost that floats through the maze like a Pac-Man ghost and hurts on
+    /// contact, but unlike the Pac-Man ghosts can be killed.
+    pub fn is_spectre(self) -> bool {
+        matches!(self, Kind::Spectre)
+    }
+
+    /// Actors that damage the player by touching them (WL_STATE.C MoveObj:
+    /// ghostobj / spectreobj).
+    fn contact_damage(self) -> bool {
+        self.is_ghost() || self.is_spectre()
+    }
+
+    /// A Spear-of-Destiny boss (reuses the WL6 boss machinery).
+    pub fn is_sod_boss(self) -> bool {
+        matches!(self, Kind::Trans | Kind::Uber | Kind::Will | Kind::Death | Kind::Angel)
     }
     /// starthitpoints[gd_hard][kind] from WL_ACT2.C ("death incarnate" tier);
     /// the real Hitler uses A_HitlerMorph's own table {500,700,800,900}.
@@ -306,6 +344,13 @@ impl Kind {
             Kind::Fat => 1200,
             // Ghosts have no FL_SHOOTABLE flag, so hitpoints are never consulted.
             Kind::Blinky | Kind::Clyde | Kind::Pinky | Kind::Inky => 0,
+            // SOD "death incarnate" tier (WL_ACT2.C starthitpoints[gd_hard]).
+            Kind::Trans => 1200,
+            Kind::Uber => 1400,
+            Kind::Will => 1300,
+            Kind::Death => 1600,
+            Kind::Angel => 2000,
+            Kind::Spectre => 25,
         }
     }
     /// GivePoints on kill (WL_STATE.C KillActor). Bosses score 5000 except the
@@ -318,6 +363,7 @@ impl Kind {
             Kind::Dog => 200,
             Kind::Mutant => 700,
             Kind::FakeHitler => 2000,
+            Kind::Spectre => 200,
             _ => 5000,
         }
     }
@@ -347,7 +393,12 @@ struct StateTable {
     kinds: [KindStates; NUM_KINDS],
 }
 
-fn build_states() -> StateTable {
+/// Build the flat state table. `shift` offsets every shared-enemy VSWAP sprite
+/// (SOD inserts four static sprites ahead of the enemy art, so `shift` is 4 for
+/// Spear); `sod` selects the boss cast (Spear bosses instead of the WL6 bosses
+/// and Pac-Man ghosts). Kinds that the chosen variant never spawns get a single
+/// placeholder state so every [`KindStates`] index stays valid.
+fn build_states(shift: u16, sod: bool) -> StateTable {
     let mut v: Vec<State> = Vec::new();
 
     // Push a humanoid (guard/officer/ss/mutant) state block and return its
@@ -415,34 +466,37 @@ fn build_states() -> StateTable {
         KindStates { stand: b, path1: b + 1, chase1: chase0, attack1: b + 9, die1: die0, pain: b + 7, pain1: b + 8 }
     };
 
-    // Guard, officer, ss, mutant (sprite bases from WL_DEF.H SPR_ enum).
+    // Guard, officer, ss, mutant (sprite bases from WL_DEF.H SPR_ enum, shifted
+    // by `shift` for the SOD sprite layout).
+    let f = shift;
     let guard = push_humanoid(
-        &mut v, 50, 58, 90, 94,
-        &[(96, 20, false), (97, 20, true), (98, 20, false)],
-        &[(91, 15), (92, 15), (93, 15), (95, 0)],
+        &mut v, 50 + f, 58 + f, 90 + f, 94 + f,
+        &[(96 + f, 20, false), (97 + f, 20, true), (98 + f, 20, false)],
+        &[(91 + f, 15), (92 + f, 15), (93 + f, 15), (95 + f, 0)],
     );
     let officer = push_humanoid(
-        &mut v, 238, 246, 278, 282,
-        &[(285, 6, false), (286, 20, true), (287, 10, false)],
-        &[(279, 11), (280, 11), (281, 11), (283, 11), (284, 0)],
+        &mut v, 238 + f, 246 + f, 278 + f, 282 + f,
+        &[(285 + f, 6, false), (286 + f, 20, true), (287 + f, 10, false)],
+        &[(279 + f, 11), (280 + f, 11), (281 + f, 11), (283 + f, 11), (284 + f, 0)],
     );
     let ss = push_humanoid(
-        &mut v, 138, 146, 178, 182,
+        &mut v, 138 + f, 146 + f, 178 + f, 182 + f,
         &[
-            (184, 20, false), (185, 20, true), (186, 10, false), (185, 10, true), (186, 10, false),
-            (185, 10, true), (186, 10, false), (185, 10, true), (186, 10, false),
+            (184 + f, 20, false), (185 + f, 20, true), (186 + f, 10, false), (185 + f, 10, true),
+            (186 + f, 10, false), (185 + f, 10, true), (186 + f, 10, false), (185 + f, 10, true),
+            (186 + f, 10, false),
         ],
-        &[(179, 15), (180, 15), (181, 15), (183, 0)],
+        &[(179 + f, 15), (180 + f, 15), (181 + f, 15), (183 + f, 0)],
     );
     let mutant = push_humanoid(
-        &mut v, 187, 195, 227, 231,
-        &[(234, 6, true), (235, 20, false), (236, 10, true), (237, 20, false)],
-        &[(228, 7), (229, 7), (230, 7), (232, 7), (233, 0)],
+        &mut v, 187 + f, 195 + f, 227 + f, 231 + f,
+        &[(234 + f, 6, true), (235 + f, 20, false), (236 + f, 10, true), (237 + f, 20, false)],
+        &[(228 + f, 7), (229 + f, 7), (230 + f, 7), (232 + f, 7), (233 + f, 0)],
     );
 
     // Dog — no shoot; a bite-jump attack and its own die chain (WL_ACT2.C).
     let dog = {
-        let (w1, w2, w3, w4) = (99u16, 107u16, 115u16, 123u16);
+        let (w1, w2, w3, w4) = (99 + f, 107 + f, 115 + f, 123 + f);
         let b = v.len();
         // stand (b+0) — synthetic: SpawnStand(en_dog) is a no-op in the
         // original; a dog stand marker just yields a dog that notices and chases.
@@ -456,10 +510,10 @@ fn build_states() -> StateTable {
         v.push(State { sprite: w4, rotate: true, tics: 15, think: Think::Path, action: Action::None, next: b + 1 });
         // jump1..jump5 (b+7..=b+11)
         let chase0 = b + 12;
-        v.push(State { sprite: 135, rotate: false, tics: 10, think: Think::None, action: Action::None, next: b + 8 });
-        v.push(State { sprite: 136, rotate: false, tics: 10, think: Think::None, action: Action::Bite, next: b + 9 });
-        v.push(State { sprite: 137, rotate: false, tics: 10, think: Think::None, action: Action::None, next: b + 10 });
-        v.push(State { sprite: 135, rotate: false, tics: 10, think: Think::None, action: Action::None, next: b + 11 });
+        v.push(State { sprite: 135 + f, rotate: false, tics: 10, think: Think::None, action: Action::None, next: b + 8 });
+        v.push(State { sprite: 136 + f, rotate: false, tics: 10, think: Think::None, action: Action::Bite, next: b + 9 });
+        v.push(State { sprite: 137 + f, rotate: false, tics: 10, think: Think::None, action: Action::None, next: b + 10 });
+        v.push(State { sprite: 135 + f, rotate: false, tics: 10, think: Think::None, action: Action::None, next: b + 11 });
         v.push(State { sprite: w1, rotate: false, tics: 10, think: Think::None, action: Action::None, next: chase0 });
         // chase1..chase4 (chase0..)
         v.push(State { sprite: w1, rotate: true, tics: 10, think: Think::DogChase, action: Action::None, next: chase0 + 1 });
@@ -470,10 +524,10 @@ fn build_states() -> StateTable {
         v.push(State { sprite: w4, rotate: true, tics: 8, think: Think::DogChase, action: Action::None, next: chase0 });
         // die1..dead (die0..)
         let die0 = chase0 + 6;
-        v.push(State { sprite: 131, rotate: false, tics: 15, think: Think::None, action: Action::DeathScream, next: die0 + 1 });
-        v.push(State { sprite: 132, rotate: false, tics: 15, think: Think::None, action: Action::None, next: die0 + 2 });
-        v.push(State { sprite: 133, rotate: false, tics: 15, think: Think::None, action: Action::None, next: die0 + 3 });
-        v.push(State { sprite: 134, rotate: false, tics: 15, think: Think::None, action: Action::None, next: die0 + 3 });
+        v.push(State { sprite: 131 + f, rotate: false, tics: 15, think: Think::None, action: Action::DeathScream, next: die0 + 1 });
+        v.push(State { sprite: 132 + f, rotate: false, tics: 15, think: Think::None, action: Action::None, next: die0 + 2 });
+        v.push(State { sprite: 133 + f, rotate: false, tics: 15, think: Think::None, action: Action::None, next: die0 + 3 });
+        v.push(State { sprite: 134 + f, rotate: false, tics: 15, think: Think::None, action: Action::None, next: die0 + 3 });
         KindStates { stand: b, path1: b + 1, chase1: chase0, attack1: b + 7, die1: die0, pain: die0, pain1: die0 }
     };
 
@@ -522,93 +576,192 @@ fn build_states() -> StateTable {
     };
 
     use Action as A;
-    // Hans Grosse (s_boss*): chaingun bursts of 6 T_Shoot volleys.
-    let hans = push_boss(
-        &mut v, true, 296, (10, 3, 8), Think::Chase,
-        &[(300, 30, A::None), (301, 10, A::Shoot), (302, 10, A::Shoot), (301, 10, A::Shoot),
-          (302, 10, A::Shoot), (301, 10, A::Shoot), (302, 10, A::Shoot), (300, 10, A::None)],
-        &[(304, 15, A::DeathScream), (305, 15, A::None), (306, 15, A::None), (303, 0, A::None)],
-    );
-    // Dr. Schabbs (s_schabb*): throws a syringe; runs at the player up close.
-    let schabbs = push_boss(
-        &mut v, true, 307, (10, 3, 8), Think::SchabbChase,
-        &[(311, 30, A::None), (312, 10, A::ThrowNeedle)],
-        &[(307, 10, A::DeathScream), (307, 140, A::None), (313, 10, A::None),
-          (314, 10, A::None), (315, 10, A::None), (316, 0, A::None)],
-    );
-    // Fake Hitler (s_fake*): a volley of 8 fireballs; always dodges.
-    let fake = push_boss(
-        &mut v, true, 321, (10, 3, 8), Think::FakeChase,
-        &[(325, 8, A::FakeFire), (325, 8, A::FakeFire), (325, 8, A::FakeFire), (325, 8, A::FakeFire),
-          (325, 8, A::FakeFire), (325, 8, A::FakeFire), (325, 8, A::FakeFire), (325, 8, A::FakeFire),
-          (325, 8, A::None)],
-        &[(328, 10, A::DeathScream), (329, 10, A::None), (330, 10, A::None),
-          (331, 10, A::None), (332, 10, A::None), (333, 0, A::None)],
-    );
-    // Mecha-Hitler (s_mecha*): chaingun bursts; dying morphs into the real
-    // Hitler at the end of die3 (A_HitlerMorph).
-    let mecha = push_boss(
-        &mut v, true, 334, (10, 6, 8), Think::Chase,
-        &[(338, 30, A::None), (339, 10, A::Shoot), (340, 10, A::Shoot),
-          (339, 10, A::Shoot), (340, 10, A::Shoot), (339, 10, A::Shoot)],
-        &[(342, 10, A::DeathScream), (343, 10, A::None), (344, 10, A::HitlerMorph), (341, 0, A::None)],
-    );
-    // Real Hitler (s_hitler*): fastest chase cycle in the game plus chaingun
-    // bursts; the long 10-frame die sequence ends on SPR_HITLER_DEAD.
-    let hitler = push_boss(
-        &mut v, false, 345, (6, 4, 2), Think::Chase,
-        &[(349, 30, A::None), (350, 10, A::Shoot), (351, 10, A::Shoot),
-          (350, 10, A::Shoot), (351, 10, A::Shoot), (350, 10, A::Shoot)],
-        &[(345, 1, A::DeathScream), (345, 140, A::None), (353, 10, A::None), (354, 10, A::None),
-          (355, 10, A::None), (356, 10, A::None), (357, 10, A::None), (358, 10, A::None),
-          (359, 10, A::None), (352, 0, A::None)],
-    );
-    // Gretel Grosse (s_gretel*): Hans's sister, same behavior.
-    let gretel = push_boss(
-        &mut v, true, 385, (10, 3, 8), Think::Chase,
-        &[(389, 30, A::None), (390, 10, A::Shoot), (391, 10, A::Shoot), (390, 10, A::Shoot),
-          (391, 10, A::Shoot), (390, 10, A::Shoot), (391, 10, A::Shoot), (389, 10, A::None)],
-        &[(393, 15, A::DeathScream), (394, 15, A::None), (395, 15, A::None), (392, 0, A::None)],
-    );
-    // Otto Giftmacher (s_gift*): throws rockets.
-    let gift = push_boss(
-        &mut v, true, 360, (10, 3, 8), Think::SchabbChase,
-        &[(364, 30, A::None), (365, 10, A::ThrowRocket)],
-        &[(360, 1, A::DeathScream), (360, 140, A::None), (366, 10, A::None),
-          (367, 10, A::None), (368, 10, A::None), (369, 0, A::None)],
-    );
-    // General Fettgesicht (s_fat*): a rocket then a chaingun burst.
-    let fat = push_boss(
-        &mut v, true, 396, (10, 3, 8), Think::SchabbChase,
-        &[(400, 30, A::None), (401, 10, A::ThrowRocket), (402, 10, A::Shoot),
-          (403, 10, A::Shoot), (402, 10, A::Shoot), (403, 10, A::Shoot)],
-        &[(396, 1, A::DeathScream), (396, 140, A::None), (404, 10, A::None),
-          (405, 10, A::None), (406, 10, A::None), (407, 0, A::None)],
-    );
+
+    // An inert placeholder for kinds the chosen variant never spawns, so every
+    // KindStates slot resolves to a valid state index.
+    let placeholder = {
+        let b = v.len();
+        v.push(State { sprite: 0, rotate: false, tics: 0, think: Think::None, action: A::None, next: b });
+        KindStates { stand: b, path1: b, chase1: b, attack1: b, die1: b, pain: b, pain1: b }
+    };
 
     // Pac-Man ghosts (WL_ACT2.C s_blinkychase1 .. s_inkychase2): a bare 2-frame
     // chase loop (10 tics each), single-view art (no rotation), running the
-    // T_Ghosts think. No stand / pain / attack / die states — ghosts spawn
-    // straight into the chase and never leave it. The unused KindStates slots
-    // all point at chase1 so every index is valid.
+    // T_Ghosts think.
     let push_ghost = |v: &mut Vec<State>, w1: u16| -> KindStates {
         let b = v.len();
         v.push(State { sprite: w1, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b + 1 });
         v.push(State { sprite: w1 + 1, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b });
         KindStates { stand: b, path1: b, chase1: b, attack1: b, die1: b, pain: b, pain1: b }
     };
-    // SPR_BLINKY_W1=288, SPR_PINKY_W1=290, SPR_CLYDE_W1=292, SPR_INKY_W1=294
-    // (WL_DEF.H, the eight sprites directly before SPR_BOSS_W1=296).
-    let blinky = push_ghost(&mut v, 288);
-    let clyde = push_ghost(&mut v, 292);
-    let pinky = push_ghost(&mut v, 290);
-    let inky = push_ghost(&mut v, 294);
+
+    // WL6 bosses + Pac-Man ghosts, or their placeholders under SPEAR.
+    let (hans, schabbs, fake, mecha, hitler, gretel, gift, fat, blinky, clyde, pinky, inky);
+    if !sod {
+        // Hans Grosse (s_boss*): chaingun bursts of 6 T_Shoot volleys.
+        hans = push_boss(
+            &mut v, true, 296, (10, 3, 8), Think::Chase,
+            &[(300, 30, A::None), (301, 10, A::Shoot), (302, 10, A::Shoot), (301, 10, A::Shoot),
+              (302, 10, A::Shoot), (301, 10, A::Shoot), (302, 10, A::Shoot), (300, 10, A::None)],
+            &[(304, 15, A::DeathScream), (305, 15, A::None), (306, 15, A::None), (303, 0, A::None)],
+        );
+        // Dr. Schabbs (s_schabb*): throws a syringe; runs at the player up close.
+        schabbs = push_boss(
+            &mut v, true, 307, (10, 3, 8), Think::SchabbChase,
+            &[(311, 30, A::None), (312, 10, A::ThrowNeedle)],
+            &[(307, 10, A::DeathScream), (307, 140, A::None), (313, 10, A::None),
+              (314, 10, A::None), (315, 10, A::None), (316, 0, A::None)],
+        );
+        // Fake Hitler (s_fake*): a volley of 8 fireballs; always dodges.
+        fake = push_boss(
+            &mut v, true, 321, (10, 3, 8), Think::FakeChase,
+            &[(325, 8, A::FakeFire), (325, 8, A::FakeFire), (325, 8, A::FakeFire), (325, 8, A::FakeFire),
+              (325, 8, A::FakeFire), (325, 8, A::FakeFire), (325, 8, A::FakeFire), (325, 8, A::FakeFire),
+              (325, 8, A::None)],
+            &[(328, 10, A::DeathScream), (329, 10, A::None), (330, 10, A::None),
+              (331, 10, A::None), (332, 10, A::None), (333, 0, A::None)],
+        );
+        // Mecha-Hitler (s_mecha*): chaingun bursts; dying morphs into the real
+        // Hitler at the end of die3 (A_HitlerMorph).
+        mecha = push_boss(
+            &mut v, true, 334, (10, 6, 8), Think::Chase,
+            &[(338, 30, A::None), (339, 10, A::Shoot), (340, 10, A::Shoot),
+              (339, 10, A::Shoot), (340, 10, A::Shoot), (339, 10, A::Shoot)],
+            &[(342, 10, A::DeathScream), (343, 10, A::None), (344, 10, A::HitlerMorph), (341, 0, A::None)],
+        );
+        // Real Hitler (s_hitler*): fastest chase cycle in the game plus chaingun
+        // bursts; the long 10-frame die sequence ends on SPR_HITLER_DEAD.
+        hitler = push_boss(
+            &mut v, false, 345, (6, 4, 2), Think::Chase,
+            &[(349, 30, A::None), (350, 10, A::Shoot), (351, 10, A::Shoot),
+              (350, 10, A::Shoot), (351, 10, A::Shoot), (350, 10, A::Shoot)],
+            &[(345, 1, A::DeathScream), (345, 140, A::None), (353, 10, A::None), (354, 10, A::None),
+              (355, 10, A::None), (356, 10, A::None), (357, 10, A::None), (358, 10, A::None),
+              (359, 10, A::None), (352, 0, A::None)],
+        );
+        // Gretel Grosse (s_gretel*): Hans's sister, same behavior.
+        gretel = push_boss(
+            &mut v, true, 385, (10, 3, 8), Think::Chase,
+            &[(389, 30, A::None), (390, 10, A::Shoot), (391, 10, A::Shoot), (390, 10, A::Shoot),
+              (391, 10, A::Shoot), (390, 10, A::Shoot), (391, 10, A::Shoot), (389, 10, A::None)],
+            &[(393, 15, A::DeathScream), (394, 15, A::None), (395, 15, A::None), (392, 0, A::None)],
+        );
+        // Otto Giftmacher (s_gift*): throws rockets.
+        gift = push_boss(
+            &mut v, true, 360, (10, 3, 8), Think::SchabbChase,
+            &[(364, 30, A::None), (365, 10, A::ThrowRocket)],
+            &[(360, 1, A::DeathScream), (360, 140, A::None), (366, 10, A::None),
+              (367, 10, A::None), (368, 10, A::None), (369, 0, A::None)],
+        );
+        // General Fettgesicht (s_fat*): a rocket then a chaingun burst.
+        fat = push_boss(
+            &mut v, true, 396, (10, 3, 8), Think::SchabbChase,
+            &[(400, 30, A::None), (401, 10, A::ThrowRocket), (402, 10, A::Shoot),
+              (403, 10, A::Shoot), (402, 10, A::Shoot), (403, 10, A::Shoot)],
+            &[(396, 1, A::DeathScream), (396, 140, A::None), (404, 10, A::None),
+              (405, 10, A::None), (406, 10, A::None), (407, 0, A::None)],
+        );
+        // SPR_BLINKY_W1=288, SPR_PINKY_W1=290, SPR_CLYDE_W1=292, SPR_INKY_W1=294.
+        blinky = push_ghost(&mut v, 288);
+        clyde = push_ghost(&mut v, 292);
+        pinky = push_ghost(&mut v, 290);
+        inky = push_ghost(&mut v, 294);
+    } else {
+        hans = placeholder;
+        schabbs = placeholder;
+        fake = placeholder;
+        mecha = placeholder;
+        hitler = placeholder;
+        gretel = placeholder;
+        gift = placeholder;
+        fat = placeholder;
+        blinky = placeholder;
+        clyde = placeholder;
+        pinky = placeholder;
+        inky = placeholder;
+    }
+
+    // Spear of Destiny bosses (WL_ACT2.C under SPEAR), or placeholders under WL6.
+    // Sprite bases are the absolute SOD sprite numbers (which already include the
+    // +4 static shift). Deliberate simplifications, documented in the module
+    // header: the UberMutant's adjacency melee (T_UShoot) is dropped; Wilhelm /
+    // Death Knight / Angel dodge-and-shoot via the Schabbs chase model; the
+    // Angel's rockets are the generic rocket projectile and its multi-phase
+    // tiredness attack (A_StartAttack / A_Relaunch) is collapsed to a single
+    // volley; the spectre's re-materialising dormancy is a plain death.
+    let (trans, uber, will, death, angel, spectre);
+    if sod {
+        // Trans Grosse (s_trans*): Hans-style chaingun bursts (SHOOT1=296).
+        trans = push_boss(
+            &mut v, true, 292, (10, 3, 8), Think::Chase,
+            &[(296, 30, A::None), (297, 10, A::Shoot), (298, 10, A::Shoot), (297, 10, A::Shoot),
+              (298, 10, A::Shoot), (297, 10, A::Shoot), (298, 10, A::Shoot), (296, 10, A::None)],
+            &[(292, 1, A::DeathScream), (292, 105, A::None), (300, 15, A::None),
+              (301, 15, A::None), (302, 15, A::None), (299, 0, A::None)],
+        );
+        // UberMutant (s_uber*): 5-shot chaingun burst (SHOOT1=319).
+        uber = push_boss(
+            &mut v, true, 315, (10, 3, 8), Think::Chase,
+            &[(319, 30, A::None), (320, 12, A::Shoot), (321, 12, A::Shoot),
+              (322, 12, A::Shoot), (321, 12, A::Shoot), (320, 12, A::Shoot), (319, 12, A::None)],
+            &[(315, 1, A::DeathScream), (315, 70, A::None), (323, 15, A::None),
+              (324, 15, A::None), (325, 15, A::None), (326, 15, A::None), (327, 0, A::None)],
+        );
+        // Barnacle Wilhelm (s_will*): a rocket then chaingun bursts; dodges.
+        will = push_boss(
+            &mut v, true, 303, (10, 3, 8), Think::SchabbChase,
+            &[(307, 30, A::None), (308, 10, A::ThrowRocket), (309, 10, A::Shoot),
+              (310, 10, A::Shoot), (309, 10, A::Shoot), (310, 10, A::Shoot)],
+            &[(303, 1, A::DeathScream), (303, 70, A::None), (311, 10, A::None),
+              (312, 10, A::None), (313, 10, A::None), (314, 0, A::None)],
+        );
+        // Death Knight (s_death*): alternating rockets and chaingun (SHOOT1=332).
+        death = push_boss(
+            &mut v, true, 328, (10, 3, 8), Think::SchabbChase,
+            &[(332, 30, A::None), (333, 10, A::ThrowRocket), (335, 10, A::Shoot),
+              (334, 10, A::ThrowRocket), (335, 10, A::Shoot)],
+            &[(328, 1, A::DeathScream), (328, 105, A::None), (336, 10, A::None),
+              (337, 10, A::None), (338, 10, A::None), (339, 10, A::None),
+              (340, 10, A::None), (341, 10, A::None), (342, 0, A::None)],
+        );
+        // Angel of Death (s_angel*): SHOOT1=355, SHOOT2=356; a single volley.
+        angel = push_boss(
+            &mut v, true, 351, (10, 3, 8), Think::SchabbChase,
+            &[(355, 10, A::None), (356, 20, A::ThrowRocket), (355, 10, A::None)],
+            &[(351, 1, A::DeathScream), (351, 105, A::None), (359, 10, A::None),
+              (360, 10, A::None), (361, 10, A::None), (362, 10, A::None),
+              (363, 10, A::None), (364, 10, A::None), (365, 10, A::None), (366, 0, A::None)],
+        );
+        // Spectre (ghostobj under SPEAR): a wait/stand, a T_Ghosts chase loop
+        // (SPECTRE_W1=343..346), and a 4-frame fade death (SPECTRE_F1=347..350).
+        spectre = {
+            let b = v.len();
+            v.push(State { sprite: 343, rotate: false, tics: 0, think: Think::Stand, action: A::None, next: b });
+            v.push(State { sprite: 343, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b + 2 });
+            v.push(State { sprite: 344, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b + 3 });
+            v.push(State { sprite: 345, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b + 4 });
+            v.push(State { sprite: 346, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b + 1 });
+            let die0 = b + 5;
+            v.push(State { sprite: 347, rotate: false, tics: 10, think: Think::None, action: A::DeathScream, next: die0 + 1 });
+            v.push(State { sprite: 348, rotate: false, tics: 10, think: Think::None, action: A::None, next: die0 + 2 });
+            v.push(State { sprite: 349, rotate: false, tics: 10, think: Think::None, action: A::None, next: die0 + 3 });
+            v.push(State { sprite: 350, rotate: false, tics: 0, think: Think::None, action: A::None, next: die0 + 3 });
+            KindStates { stand: b, path1: b, chase1: b + 1, attack1: b + 1, die1: die0, pain: b + 1, pain1: b + 1 }
+        };
+    } else {
+        trans = placeholder;
+        uber = placeholder;
+        will = placeholder;
+        death = placeholder;
+        angel = placeholder;
+        spectre = placeholder;
+    }
 
     StateTable {
         states: v,
         kinds: [
             guard, officer, ss, dog, mutant, hans, schabbs, fake, mecha, hitler, gretel, gift, fat,
-            blinky, clyde, pinky, inky,
+            blinky, clyde, pinky, inky, trans, uber, will, death, angel, spectre,
         ],
     }
 }
@@ -772,8 +925,20 @@ fn alert_sound(kind: Kind) -> Option<u8> {
         Kind::Schabbs => snd::SCHABBSHASND as u8,
         Kind::FakeHitler => snd::TOT_HUNDSND as u8,
         Kind::MechaHitler | Kind::Hitler => snd::DIESND as u8,
-        // The mutant and the ghosts never run FirstSighting (silent alert).
-        Kind::Mutant | Kind::Blinky | Kind::Clyde | Kind::Pinky | Kind::Inky => return None,
+        // The mutant and the ghosts never run FirstSighting (silent alert). The
+        // SOD bosses have distinct digitized sight yells (TRANSSIGHTSND etc.)
+        // that have no WL6 AdLib counterpart, so they alert silently here.
+        Kind::Mutant
+        | Kind::Blinky
+        | Kind::Clyde
+        | Kind::Pinky
+        | Kind::Inky
+        | Kind::Trans
+        | Kind::Uber
+        | Kind::Will
+        | Kind::Death
+        | Kind::Angel
+        | Kind::Spectre => return None,
     })
 }
 
@@ -807,7 +972,14 @@ impl Actors {
     /// skill, the medium codes only at skill >= medium, the hard codes only at
     /// skill == hard. Bosses and corpses ignore skill.
     pub fn spawn_from_level(level: &Level, skill: u8) -> Self {
-        let table = build_states();
+        Self::spawn_from_level_variant(level, skill, 0, false)
+    }
+
+    /// Spawn the level's actors for a given variant. `sprite_shift` is added to
+    /// every shared-enemy VSWAP sprite (4 for Spear of Destiny); `sod` selects
+    /// the Spear boss/spectre spawn codes instead of the WL6 boss/ghost codes.
+    pub fn spawn_from_level_variant(level: &Level, skill: u8, sprite_shift: u16, sod: bool) -> Self {
+        let table = build_states(sprite_shift, sod);
         let mut list = Vec::new();
         for (i, &code) in level.plane1.iter().enumerate() {
             let tx = (i % MAP_SIZE) as i32;
@@ -836,7 +1008,7 @@ impl Actors {
                 });
                 continue;
             }
-            if let Some(kind) = decode_ghost_spawn(code) {
+            if let Some(kind) = if sod { None } else { decode_ghost_spawn(code) } {
                 // SpawnGhosts (WL_ACT2.C): spawn straight into the chase loop at
                 // SPDDOG, facing east, FL_AMBUSH set but NOT FL_SHOOTABLE — so a
                 // ghost can never be shot and never enters SightPlayer. It carries
@@ -862,7 +1034,7 @@ impl Actors {
                 });
                 continue;
             }
-            if let Some((kind, dir)) = decode_boss_spawn(code) {
+            if let Some((kind, dir)) = decode_boss_spawn(code, sod) {
                 // Bosses (WL_ACT2.C Spawn* functions): always standing, always
                 // FL_AMBUSH — they only wake on line of sight, never on noise.
                 // Pac-Man ghosts (codes 224..=227, E3M10) are not implemented.
@@ -1564,7 +1736,7 @@ impl Actors {
         {
             // A ghost hurts the player on contact then keeps moving (WL_STATE.C
             // MoveObj: `TakeDamage(tics*2,ob)` for ghostobj/spectreobj).
-            if self.list[i].kind.is_ghost() {
+            if self.list[i].kind.contact_damage() {
                 self.damage += (tics * 2.0) as i32;
             }
             // Back up — don't stand on the player.
@@ -1972,6 +2144,13 @@ impl Actors {
             Kind::Fat => snd::ROSESND as u8,
             // Ghosts never die; this arm only exists for exhaustiveness.
             Kind::Blinky | Kind::Clyde | Kind::Pinky | Kind::Inky => snd::DOGDEATHSND as u8,
+            // SOD boss death yells (TRANSDEATHSND etc.) are digitized-only with
+            // no WL6 AdLib counterpart; reuse the generic guard scream so the
+            // remap has a valid id to translate.
+            Kind::Trans | Kind::Uber | Kind::Will | Kind::Death | Kind::Angel => {
+                snd::DEATHSCREAM1SND as u8
+            }
+            Kind::Spectre => snd::AHHHGSND as u8,
         }
     }
 
@@ -2180,7 +2359,19 @@ fn check_line(world: &World, x0: f32, y0: f32, x1: f32, y1: f32) -> bool {
 /// Decode a boss spawn code into (kind, facing dir). Bosses are single tiles
 /// with no difficulty or direction variants (WL_GAME.C ScanInfoPlane); the
 /// facing comes from each WL_ACT2.C Spawn* function.
-fn decode_boss_spawn(code: u16) -> Option<(Kind, u8)> {
+fn decode_boss_spawn(code: u16, sod: bool) -> Option<(Kind, u8)> {
+    if sod {
+        // WL_GAME.C ScanInfoPlane under SPEAR.
+        return Some(match code {
+            125 => (Kind::Trans, SOUTH),
+            142 => (Kind::Uber, SOUTH),
+            143 => (Kind::Will, SOUTH),
+            161 => (Kind::Death, SOUTH),
+            107 => (Kind::Angel, SOUTH),
+            106 => (Kind::Spectre, SOUTH),
+            _ => return None,
+        });
+    }
     Some(match code {
         214 => (Kind::Hans, SOUTH),
         196 => (Kind::Schabbs, SOUTH),

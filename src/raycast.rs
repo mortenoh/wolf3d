@@ -166,6 +166,9 @@ impl Door {
 /// (after the demo/deathcam sprites).
 const STATIC_FIRST: u16 = 23;
 const STATIC_LAST: u16 = 70;
+/// SOD extends the statinfo table with four more statics (codes 71..=74): a
+/// marble pillar, a 25-round ammo box, a truck, and the Spear of Destiny.
+const STATIC_LAST_SOD: u16 = 74;
 const SPR_STAT_0: usize = 2;
 
 /// Spawn codes whose object blocks movement (`bo_block` in WL_ACT1.C's
@@ -194,6 +197,8 @@ pub enum Bonus {
     Bible,      // +1000
     Crown,      // +5000
     FullHeal,   // 1-up: full health, +25 ammo, +1 life
+    Clip25,     // SOD bonus box: +25 ammo (bo_25clip)
+    Spear,      // SOD: the Spear of Destiny — warps to the final Angel floor
 }
 
 impl Bonus {
@@ -218,6 +223,8 @@ impl Bonus {
                 Bonus::Bible => 12,
                 Bonus::Crown => 13,
                 Bonus::FullHeal => 14,
+                Bonus::Clip25 => 15,
+                Bonus::Spear => 16,
             },
         }
     }
@@ -239,6 +246,8 @@ impl Bonus {
             12 => Bonus::Bible,
             13 => Bonus::Crown,
             14 => Bonus::FullHeal,
+            15 => Bonus::Clip25,
+            16 => Bonus::Spear,
             _ => return Err(SaveError::BadEnum("bonus")),
         }))
     }
@@ -264,6 +273,9 @@ fn bonus_for(code: u16) -> Option<Bonus> {
         32 => Bonus::Crown,
         33 => Bonus::FullHeal,
         34 | 38 => Bonus::Gibs,
+        // SOD-only statinfo pickups (WL_ACT1.C statinfo under SPEAR).
+        49 => Bonus::Clip25,
+        51 => Bonus::Spear,
         _ => return None,
     })
 }
@@ -286,6 +298,8 @@ fn bonus_sprite_offset(b: Bonus) -> usize {
         Bonus::Crown => 32,
         Bonus::FullHeal => 33,
         Bonus::Gibs => 34,
+        Bonus::Clip25 => 49,
+        Bonus::Spear => 51,
     }
 }
 
@@ -370,14 +384,22 @@ pub struct World {
 }
 
 impl World {
+    /// Build the WL6 world (the default variant).
     pub fn new(level: Level) -> Self {
+        Self::new_variant(level, false)
+    }
+
+    /// Build a world for a given variant. `sod` extends the static-object code
+    /// range to include the Spear-of-Destiny statics (codes 71..=74).
+    pub fn new_variant(level: Level, sod: bool) -> Self {
+        let static_last = if sod { STATIC_LAST_SOD } else { STATIC_LAST };
         let mut statics = Vec::new();
         let mut blocked = vec![false; MAP_SIZE * MAP_SIZE];
         let mut doors = Vec::new();
         let mut door_grid = vec![0u8; MAP_SIZE * MAP_SIZE];
 
         for (i, &obj) in level.plane1.iter().enumerate() {
-            if (STATIC_FIRST..=STATIC_LAST).contains(&obj) {
+            if (STATIC_FIRST..=static_last).contains(&obj) {
                 statics.push(StaticSprite {
                     x: (i % MAP_SIZE) as f32 + 0.5,
                     y: (i / MAP_SIZE) as f32 + 0.5,
@@ -385,7 +407,8 @@ impl World {
                     bonus: bonus_for(obj),
                     picked: false,
                 });
-                blocked[i] = BLOCKING_STATICS.contains(&obj);
+                // SOD marble pillar (71) and truck (73) also block movement.
+                blocked[i] = BLOCKING_STATICS.contains(&obj) || (sod && matches!(obj, 71 | 73));
             }
         }
         for (i, &t) in level.plane0.iter().enumerate() {

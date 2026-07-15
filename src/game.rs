@@ -5,8 +5,8 @@
 use crate::actors::{Actors, Kind};
 use crate::config::{self, Config, MAX_MOUSE_SENS, MAX_VIEW, MIN_VIEW, VIEW_STEP};
 use crate::demorec::Demo;
-use crate::assets::vgagraph::{T_ENDART1, T_HELPART};
 use crate::assets::{self, MapSet, VSwap, VgaGraph};
+use crate::variant::{GameId, Variant};
 use crate::fb::Framebuffer;
 use crate::highscore::{self, HighScore};
 use crate::hud::{self, Hud, HudState, KEY_GOLD, KEY_SILVER, VIEW_H};
@@ -220,6 +220,9 @@ fn bonus_sound(bonus: Bonus) -> u8 {
         Bonus::Bible => snd::BONUS3SND as u8,
         Bonus::Crown => snd::BONUS4SND as u8,
         Bonus::FullHeal => snd::BONUS1UPSND as u8,
+        Bonus::Clip25 => snd::GETAMMOSND as u8,
+        // GETSPEARSND has no WL6 counterpart; the level-done fanfare stands in.
+        Bonus::Spear => snd::LEVELDONESND as u8,
     }
 }
 
@@ -249,6 +252,13 @@ pub fn end_boss(level_idx: usize) -> Option<Kind> {
     }
 }
 
+/// The boss whose death wins the game for Spear of Destiny: the Angel of Death
+/// on the final floor (mapon 20), reached by grabbing the spear (WL_ACT2.C
+/// A_Victory sets `playstate = ex_victorious`).
+fn sod_end_boss(level_idx: usize) -> Option<Kind> {
+    (level_idx == 20).then_some(Kind::Angel)
+}
+
 /// attackinfo[weapon][frame] = (tics, attack, frame) from WL_AGENT.C. `attack`:
 /// 0 none, 1 gun fire, 2 knife, 3/4 hold-to-repeat, -1 (=5 here) end.
 const ATTACK_END: i8 = -1;
@@ -260,6 +270,9 @@ const ATTACK_INFO: [[(u8, i8, u8); 4]; 4] = [
 ];
 
 pub struct Game {
+    /// The active game variant (WL6 or Spear of Destiny): data-file extension,
+    /// chunk numbers, sprite shift, songs, par times.
+    pub variant: Variant,
     pub vswap: VSwap,
     pub maps: MapSet,
     pub vga: VgaGraph,
@@ -393,6 +406,9 @@ pub struct Game {
     /// `gamestate.victoryflag` from A_StartDeathCam and runs a deathcam plus
     /// the episode-end sequence; here the flag itself is the victory marker).
     pub victory: bool,
+    /// Set when the player grabs the Spear of Destiny (SOD): the next update
+    /// warps them to the final Angel-of-Death floor (WL_GAME.C `spearflag`).
+    pub spear_pending: bool,
     /// Debug-only god mode for headless demo scripts: the player takes no
     /// damage. Set via the demo `godmode` command or the 7 cheat key.
     pub god: bool,
@@ -416,25 +432,33 @@ pub struct Game {
 
 impl Game {
     pub fn new(level_idx: usize) -> Self {
+        Self::new_variant(level_idx, Variant::detect())
+    }
+
+    pub fn new_variant(level_idx: usize, variant: Variant) -> Self {
         let dir = assets::data_dir();
-        let vswap = VSwap::load(&dir)
-            .unwrap_or_else(|e| panic!("failed to load VSWAP.WL6 from {dir:?}: {e}"));
-        let maps = MapSet::load(&dir)
-            .unwrap_or_else(|e| panic!("failed to load GAMEMAPS from {dir:?}: {e}"));
-        let vga = VgaGraph::load(&dir)
-            .unwrap_or_else(|e| panic!("failed to load VGAGRAPH from {dir:?}: {e}"));
-        let hud = Hud::new(&vga);
-        let menu = Menu::new(&vga);
-        let inter_gfx = InterGfx::new(&vga);
+        let ext = variant.ext;
+        let vswap = VSwap::load_ext(&dir, ext)
+            .unwrap_or_else(|e| panic!("failed to load VSWAP.{ext} from {dir:?}: {e}"));
+        let maps = MapSet::load_ext(&dir, ext)
+            .unwrap_or_else(|e| panic!("failed to load GAMEMAPS.{ext} from {dir:?}: {e}"));
+        let vga = VgaGraph::load_ext(&dir, ext)
+            .unwrap_or_else(|e| panic!("failed to load VGAGRAPH.{ext} from {dir:?}: {e}"));
+        let hud = Hud::new(&vga, &variant.gfx);
+        let menu = Menu::new(&vga, &variant);
+        let inter_gfx = InterGfx::new(&vga, &variant.gfx);
         // The tests and WOLF3D_LEVEL boot straight into a playable level at the
         // hardest skill (all difficulty tiers present), so keep that the default.
         let difficulty = Difficulty::Hard;
         let level_idx = level_idx.min(maps.num_levels() - 1);
-        let world = World::new(maps.level(level_idx));
+        let sod = variant.is_sod();
+        let world = World::new_variant(maps.level(level_idx), sod);
         let player = raycast::find_spawn(&world.level);
-        let actors = Actors::spawn_from_level(&world.level, difficulty.skill());
+        let actors =
+            Actors::spawn_from_level_variant(&world.level, difficulty.skill(), variant.sprite_shift, sod);
         let stats = compute_stats(&world, &actors);
         Self {
+            variant,
             vswap,
             maps,
             vga,
@@ -501,6 +525,7 @@ impl Game {
             weapon: WEAPON_PISTOL,
             died: false,
             victory: false,
+            spear_pending: false,
             god: false,
             infinite_ammo: false,
             attacking: false,
@@ -526,9 +551,15 @@ impl Game {
     /// Rebuild the current level's world, actors, and player start, and recount
     /// the floor's kill/secret/treasure totals (WL_GAME.C ScanInfoPlane).
     fn load_level(&mut self) {
-        self.world = World::new(self.maps.level(self.level_idx));
+        let sod = self.variant.is_sod();
+        self.world = World::new_variant(self.maps.level(self.level_idx), sod);
         self.player = raycast::find_spawn(&self.world.level);
-        self.actors = Actors::spawn_from_level(&self.world.level, self.difficulty.skill());
+        self.actors = Actors::spawn_from_level_variant(
+            &self.world.level,
+            self.difficulty.skill(),
+            self.variant.sprite_shift,
+            sod,
+        );
         self.stats = compute_stats(&self.world, &self.actors);
         self.attacking = false;
         self.attack_frame = 0;
@@ -567,7 +598,10 @@ impl Game {
     /// at boot). Headless tests never call this, so their `demos` stays empty and
     /// the attract loop simply skips the demo stage.
     pub fn load_attract_demos(&mut self) {
-        self.demos = crate::demorec::load_all();
+        // Only replay demos recorded under the running variant — a WL6 demo's
+        // map/RNG makes no sense under SOD and vice versa.
+        let want = if self.variant.is_sod() { crate::demorec::VAR_SOD } else { crate::demorec::VAR_WL6 };
+        self.demos = crate::demorec::load_all().into_iter().filter(|d| d.variant == want).collect();
     }
 
     /// Frame entry point: dispatch to the menu flow or the simulation.
@@ -628,9 +662,56 @@ impl Game {
     /// Finish the current floor via the elevator: finalize its stats, award the
     /// bonus, and enter the intermission (WL_INTER.C LevelCompleted). `secret`
     /// routes to the episode's secret floor (floor 10) rather than the next one.
+    /// The 1-based floor number shown on the HUD/intermission. WL6 counts within
+    /// the episode (1..10); SOD counts the whole 21-floor campaign.
+    fn display_floor(&self) -> usize {
+        match self.variant.id {
+            GameId::Wl6 => self.level_idx % 10 + 1,
+            GameId::Sod => self.level_idx + 1,
+        }
+    }
+
+    /// The "MM:SS" par label for the current floor, or "??:??" when there is no
+    /// par (boss / secret floors).
+    fn par_label(&self) -> String {
+        let s = (self.variant.par_minutes(self.level_idx) * 60.0) as i32;
+        if s == 0 { "??:??".to_string() } else { format!("{:02}:{:02}", s / 60, s % 60) }
+    }
+
+    /// The floor an elevator leads to, per variant (WL_GAME.C GameLoop). WL6
+    /// routes a secret elevator to the episode's floor 10; SOD detours floors 4
+    /// and 12 to the two secret floors (19/20) and returns from them.
+    fn compute_next_level(&self, secret: bool) -> usize {
+        let n = self.maps.num_levels();
+        match self.variant.id {
+            GameId::Wl6 => {
+                if secret {
+                    ((self.level_idx / 10) * 10 + 9).min(n - 1)
+                } else {
+                    (self.level_idx + 1) % n
+                }
+            }
+            GameId::Sod => {
+                if secret {
+                    match self.level_idx {
+                        3 => 18,
+                        11 => 19,
+                        _ => (self.level_idx + 1) % n,
+                    }
+                } else {
+                    match self.level_idx {
+                        18 => 4,
+                        19 => 12,
+                        _ => (self.level_idx + 1) % n,
+                    }
+                }
+            }
+        }
+    }
+
     fn begin_intermission(&mut self, secret: bool) {
         let time_sec = (self.stats.time as i32).min(99 * 60);
-        let par_sec = inter::par_seconds(self.level_idx);
+        let par_sec = (self.variant.par_minutes(self.level_idx) * 60.0) as i32;
         let ratios = [
             self.stats.kill_ratio(),
             self.stats.secret_ratio(),
@@ -640,17 +721,12 @@ impl Game {
         self.score += bonus; // GivePoints(bonus)
         self.accumulate_episode(); // feed the Victory averages (LevelRatios)
 
-        let n = self.maps.num_levels();
-        let next = if secret {
-            ((self.level_idx / 10) * 10 + 9).min(n - 1)
-        } else {
-            (self.level_idx + 1) % n
-        };
-        let floor = (self.level_idx % 10) as i32 + 1;
+        let next = self.compute_next_level(secret);
+        let floor = self.display_floor() as i32;
         self.inter = Some(Intermission::new(
             floor,
             time_sec,
-            inter::par_string(self.level_idx),
+            self.par_label(),
             ratios,
             timeleft,
             bonus,
@@ -697,6 +773,14 @@ impl Game {
         self.epi_tr_sum += self.stats.treasure_ratio();
         self.epi_time_sum += (self.stats.time as i32).min(99 * 60);
         self.epi_count += 1;
+    }
+
+    /// The boss whose death ends the game on the current floor, per variant.
+    fn current_end_boss(&self) -> Option<Kind> {
+        match self.variant.id {
+            GameId::Wl6 => end_boss(self.level_idx),
+            GameId::Sod => sod_end_boss(self.level_idx),
+        }
     }
 
     /// A_StartDeathCam: the episode end boss is dead. Set the victory flag, swing
@@ -775,8 +859,9 @@ impl Game {
 
     /// WL_TEXT.C `EndText`: page through the current episode's end article.
     fn begin_endtext(&mut self) {
-        let episode = self.level_idx / 10;
-        let chunk = T_ENDART1 + episode;
+        // SOD is one campaign (a single end article); WL6 picks per episode.
+        let episode = if self.variant.is_sod() { 0 } else { self.level_idx / 10 };
+        let chunk = self.variant.gfx.end_art1 + episode;
         self.endtext = Some(TextScreen::new(&self.vga, chunk));
         self.endtext_page = 0;
         self.screen = GameScreen::EndText;
@@ -1117,8 +1202,15 @@ impl Game {
         if input.menu_enter {
             match self.main_sel {
                 menu::ITEM_NEW_GAME => {
+                    // SOD is a single campaign — New Game goes straight to the
+                    // difficulty select; WL6 first picks an episode.
                     self.episode_sel = 0;
-                    self.screen = GameScreen::Episode;
+                    self.diff_sel = 0;
+                    self.screen = if self.variant.has_episodes {
+                        GameScreen::Episode
+                    } else {
+                        GameScreen::Difficulty
+                    };
                 }
                 menu::ITEM_SOUND => {
                     self.sound_sel = self.sfx_mode as usize;
@@ -1138,9 +1230,12 @@ impl Game {
                     self.screen = GameScreen::SaveGame;
                 }
                 menu::ITEM_READ => {
-                    self.readthis = Some(TextScreen::new(&self.vga, T_HELPART));
-                    self.readthis_page = 0;
-                    self.screen = GameScreen::ReadThis;
+                    // SOD has no "Read This!" help article; ignore the item there.
+                    if let Some(help) = self.variant.gfx.help_art {
+                        self.readthis = Some(TextScreen::new(&self.vga, help));
+                        self.readthis_page = 0;
+                        self.screen = GameScreen::ReadThis;
+                    }
                 }
                 menu::ITEM_VIEWSCORES => {
                     self.hs_return = HsReturn::Menu;
@@ -1350,7 +1445,8 @@ impl Game {
     /// Serialize the whole live game to a versioned byte buffer.
     pub fn write_save(&self, name: &str) -> Vec<u8> {
         let mut w = savegame::Writer::new();
-        savegame::write_header(&mut w, name, self.level_idx, self.difficulty.skill());
+        let var = if self.variant.is_sod() { savegame::VAR_SOD } else { savegame::VAR_WL6 };
+        savegame::write_header(&mut w, name, self.level_idx, self.difficulty.skill(), var);
         w.put_f32(self.player.x);
         w.put_f32(self.player.y);
         w.put_f32(self.player.angle);
@@ -1381,6 +1477,11 @@ impl Game {
     pub fn apply_save(&mut self, data: &[u8]) -> Result<(), SaveError> {
         let mut r = savegame::Reader::new(data);
         let header = savegame::read_header(&mut r)?;
+        // Refuse a save made under the other variant (WL6 vs. SOD).
+        let want = if self.variant.is_sod() { savegame::VAR_SOD } else { savegame::VAR_WL6 };
+        if header.variant != want {
+            return Err(SaveError::CrossVariant);
+        }
         // Peek the body into locals before touching self, so a truncated file
         // can't leave us half-loaded.
         let level_idx = header.level_idx.min(self.maps.num_levels() - 1);
@@ -1453,7 +1554,8 @@ impl Game {
             self.diff_sel = (self.diff_sel + 1) % menu::NUM_DIFFICULTIES;
         }
         if input.menu_back {
-            self.screen = GameScreen::Episode;
+            self.screen =
+                if self.variant.has_episodes { GameScreen::Episode } else { GameScreen::MainMenu };
             return;
         }
         if input.menu_enter {
@@ -1474,6 +1576,7 @@ impl Game {
         self.weapon = WEAPON_PISTOL;
         self.died = false;
         self.victory = false;
+        self.spear_pending = false;
         self.reset_episode_stats();
         self.load_level();
         self.started = true;
@@ -1582,13 +1685,26 @@ impl Game {
         }
         self.try_pickups();
 
+        // SOD: grabbing the spear warps to the final Angel-of-Death floor
+        // (WL_GAME.C `spearflag`: mapon = 20, always granted the gold key). The
+        // original re-places the player at the pickup coordinates; we use the
+        // Angel floor's own player start, which is robust to map geometry.
+        if self.spear_pending {
+            self.spear_pending = false;
+            self.level_idx = 20.min(self.maps.num_levels() - 1);
+            self.load_level();
+            self.keys = KEY_GOLD;
+            self.screen = GameScreen::Playing;
+            return;
+        }
+
         // Killing the floor's end boss wins the episode: the original's boss die
         // chain ends in A_StartDeathCam (deathcam + victoryflag + the episode-end
         // sequence). Detect it here and swing into the deathcam.
         let mut boss_killed = None;
         for kind in self.actors.take_deaths() {
             self.stats.kills += 1;
-            if Some(kind) == end_boss(self.level_idx) {
+            if Some(kind) == self.current_end_boss() {
                 boss_killed = Some(kind);
             }
         }
@@ -1781,6 +1897,14 @@ impl Game {
                 self.stats.treasure += 1;
                 true
             }
+            // SOD bonus box: +25 ammo (bo_25clip).
+            Bonus::Clip25 => self.give_ammo(25),
+            // SOD: grabbing the spear arms the warp to the Angel floor
+            // (WL_AGENT.C GetBonus bo_spear sets spearflag). Always taken.
+            Bonus::Spear => {
+                self.spear_pending = true;
+                true
+            }
         }
     }
 
@@ -1970,8 +2094,8 @@ impl Game {
         self.hud.draw(
             fb,
             &HudState {
-                // Per-episode floor number, like the original's mapon+1.
-                floor: (self.level_idx % 10) as i32 + 1,
+                // Per-episode floor number (WL6) or campaign floor (SOD).
+                floor: self.display_floor() as i32,
                 score: self.score,
                 lives: self.lives,
                 health: self.health,

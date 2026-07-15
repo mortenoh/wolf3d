@@ -29,10 +29,14 @@ use std::path::PathBuf;
 
 /// File magic: identifies a Wolf3D save.
 pub const MAGIC: &[u8; 8] = b"WOLF3DSV";
-/// Current on-disk format version. Bumped to 2 for the secrets + intermission
-/// milestone (per-floor stats, push-wall motion, plane-0 map edits); version-1
-/// saves are refused cleanly by [`read_header`].
-pub const VERSION: u16 = 2;
+/// Current on-disk format version. Bumped to 3 to tag the game variant (WL6 /
+/// SOD) so a cross-variant load is refused cleanly; version-1/2 saves are
+/// refused by [`read_header`].
+pub const VERSION: u16 = 3;
+
+/// Variant tag in the save header: 0 = WL6, 1 = Spear of Destiny.
+pub const VAR_WL6: u8 = 0;
+pub const VAR_SOD: u8 = 1;
 /// Save slots exposed by the Load/Save menus.
 pub const NUM_SLOTS: usize = 10;
 
@@ -50,6 +54,8 @@ pub enum SaveError {
     BadEnum(&'static str),
     /// The slot name was not valid UTF-8.
     Utf8,
+    /// The save was made under a different game variant (WL6 vs. SOD).
+    CrossVariant,
     /// Underlying file IO failed.
     Io(std::io::Error),
 }
@@ -62,6 +68,7 @@ impl std::fmt::Display for SaveError {
             SaveError::BadVersion(v) => write!(f, "unsupported save version {v}"),
             SaveError::BadEnum(what) => write!(f, "invalid {what} in save"),
             SaveError::Utf8 => write!(f, "slot name is not valid UTF-8"),
+            SaveError::CrossVariant => write!(f, "save is from a different game (WL6/SOD)"),
             SaveError::Io(e) => write!(f, "save IO error: {e}"),
         }
     }
@@ -167,12 +174,15 @@ pub struct SlotHeader {
     pub name: String,
     pub level_idx: usize,
     pub difficulty: u8,
+    /// Game variant the save was made under ([`VAR_WL6`] / [`VAR_SOD`]).
+    pub variant: u8,
 }
 
 /// Write the magic + version + [`SlotHeader`] fields.
-pub fn write_header(w: &mut Writer, name: &str, level_idx: usize, difficulty: u8) {
+pub fn write_header(w: &mut Writer, name: &str, level_idx: usize, difficulty: u8, variant: u8) {
     w.buf.extend_from_slice(MAGIC);
     w.put_u16(VERSION);
+    w.put_u8(variant);
     w.put_str(name);
     w.put_u32(level_idx as u32);
     w.put_u8(difficulty);
@@ -188,10 +198,11 @@ pub fn read_header(r: &mut Reader) -> Result<SlotHeader, SaveError> {
     if version != VERSION {
         return Err(SaveError::BadVersion(version));
     }
+    let variant = r.get_u8()?;
     let name = r.get_str()?;
     let level_idx = r.get_u32()? as usize;
     let difficulty = r.get_u8()?;
-    Ok(SlotHeader { name, level_idx, difficulty })
+    Ok(SlotHeader { name, level_idx, difficulty, variant })
 }
 
 /// The directory holding the save slots (`saves/` under the crate root). The

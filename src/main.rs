@@ -3,7 +3,7 @@
 //! each frame and stretch it onto the window (nearest-neighbor, letterboxed
 //! to 4:3 — the original's display aspect).
 
-use wolf3d::{config, demo, fb, game, sound};
+use wolf3d::{config, demo, fb, game};
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -532,13 +532,13 @@ impl App {
             | GameScreen::Attract
             | GameScreen::GetPsyched
             | GameScreen::Death
-            | GameScreen::DeathCam => Some(sound::song_for_level(level)),
-            GameScreen::Intermission => Some(sound::ENDLEVEL_MUS),
+            | GameScreen::DeathCam => Some(self.game.variant.song_for_level(level)),
+            GameScreen::Intermission => Some(self.game.variant.endlevel_song()),
             GameScreen::Victory
             | GameScreen::EndText
             | GameScreen::HighScores
-            | GameScreen::HighScoreEntry => Some(sound::ULTIMATE_MUS),
-            _ => Some(sound::MENU_SONG),
+            | GameScreen::HighScoreEntry => Some(self.game.variant.victory_song()),
+            _ => Some(self.game.variant.menu_song()),
         };
         if desired != self.current_music {
             self.current_music = desired;
@@ -819,7 +819,7 @@ fn main() {
 
     // Open the audio device for the windowed path. Any failure (no device, no
     // sound data) is non-fatal: the game just runs silent.
-    let sound = match AudioData::load(&wolf3d::assets::data_dir()) {
+    let sound = match AudioData::load_ext(&wolf3d::assets::data_dir(), game.variant.ext) {
         Ok(audio) => {
             let assets = SoundAssets::new(audio, game.vswap.digi.clone());
             match Backend::start(assets) {
