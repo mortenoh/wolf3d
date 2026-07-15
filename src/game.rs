@@ -3,14 +3,17 @@
 //! demo driver synthesizes it. Both run exactly the same code.
 
 use crate::actors::{Actors, Kind};
+use crate::assets::vgagraph::{T_ENDART1, T_HELPART};
 use crate::assets::{self, MapSet, VSwap, VgaGraph};
 use crate::fb::Framebuffer;
+use crate::highscore::{self, HighScore};
 use crate::hud::{self, Hud, HudState, KEY_GOLD, KEY_SILVER, VIEW_H};
-use crate::inter::{self, InterGfx, Intermission, LevelStats};
+use crate::inter::{self, InterGfx, Intermission, LevelStats, VictoryStats};
 use crate::menu::{self, Menu, MAIN_ITEMS};
 use crate::raycast::{self, Bonus, ElevatorUse, Player, PushUse, World};
 use crate::savegame::{self, SaveError};
 use crate::sound as snd;
+use crate::text::TextScreen;
 
 /// Longest save-slot name the text field accepts (WL_MENU.C allowed 31; the
 /// menu font fits a bit fewer in the slot box).
@@ -88,6 +91,23 @@ pub enum GameScreen {
     Intermission,
     /// The brief "Get Psyched!" load screen shown while the next floor loads.
     GetPsyched,
+    /// The brief red-tint death pause (WL_GAME.C `Died`): shown for ~1s after
+    /// the player is killed, before the floor restarts or the game ends.
+    Death,
+    /// The cinematic deathcam (WL_ACT2.C `A_StartDeathCam`): after an episode
+    /// end boss dies the camera swings round to watch the corpse fall again.
+    DeathCam,
+    /// The "YOU WIN!" episode-victory screen (WL_INTER.C `Victory`).
+    Victory,
+    /// The end-of-episode article pages (WL_TEXT.C `EndText`).
+    EndText,
+    /// The high-score board (WL_INTER.C `DrawHighScores`).
+    HighScores,
+    /// Name entry on the high-score board when a run qualifies
+    /// (WL_INTER.C `CheckHighScore`).
+    HighScoreEntry,
+    /// The "Read This!" help article (WL_TEXT.C `HelpScreens`).
+    ReadThis,
 }
 
 /// Skill level (WL_DEF.H `gd_*`). Controls enemy spawns (see
@@ -127,6 +147,22 @@ pub const TIC: f32 = 1.0 / 70.0;
 /// How long the "Get Psyched!" load screen lingers (real/sim seconds) before the
 /// already-loaded floor starts. Loads are instant here, so this is purely cosmetic.
 const LOAD_SCREEN_SECS: f32 = 0.5;
+
+/// How long the red death-tint lingers before the floor restarts / game ends.
+const DEATH_SECS: f32 = 1.0;
+
+/// Deathcam duration (WL_ACT2.C `IN_UserInput(300)`): ~300 tics before it auto-
+/// advances to the victory screen (any key skips it).
+const DEATHCAM_SECS: f32 = 300.0 / 70.0;
+
+/// Where the high-score board returns to after it is dismissed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HsReturn {
+    /// Back to the title screen (after a victory or a game over).
+    Title,
+    /// Back to the main menu (the "View Scores" entry).
+    Menu,
+}
 
 /// Whether a bonus static counts toward the floor's treasure total (WL_AGENT.C
 /// GetBonus increments `treasurecount` for these): the four valuables plus the
@@ -214,6 +250,37 @@ pub struct Game {
     pub show_load_screen: bool,
     /// Countdown clock while on the `GetPsyched` screen.
     psyched_clock: f32,
+
+    // --- Endgame flow (deathcam / victory / endtext / high scores) ----------
+    /// Clock on the `Death` red-tint screen.
+    death_clock: f32,
+    /// True when the death that started the `Death` screen was the last life,
+    /// so it routes to the high-score check rather than a floor restart.
+    death_game_over: bool,
+    /// Clock on the `DeathCam` screen.
+    deathcam_clock: f32,
+    /// The averaged episode stats shown on the `Victory` screen.
+    victory_stats: VictoryStats,
+    /// The decoded end-of-episode article and the current page.
+    endtext: Option<TextScreen>,
+    endtext_page: usize,
+    /// The decoded "Read This!" help article and the current page.
+    readthis: Option<TextScreen>,
+    readthis_page: usize,
+    /// The high-score board (loaded from disk at startup).
+    pub highscores: Vec<HighScore>,
+    /// The board slot being named on the `HighScoreEntry` screen.
+    hs_edit_slot: Option<usize>,
+    /// The name buffer being typed on the `HighScoreEntry` screen.
+    hs_name: String,
+    /// Where the board returns to when dismissed.
+    hs_return: HsReturn,
+    /// Running per-episode ratio/time accumulation for the `Victory` averages.
+    epi_kr_sum: i32,
+    epi_sr_sum: i32,
+    epi_tr_sum: i32,
+    epi_time_sum: i32,
+    epi_count: i32,
 
     // --- Front-end / menu state ---
     pub screen: GameScreen,
@@ -313,6 +380,23 @@ impl Game {
             inter: None,
             show_load_screen: false,
             psyched_clock: 0.0,
+            death_clock: 0.0,
+            death_game_over: false,
+            deathcam_clock: 0.0,
+            victory_stats: VictoryStats::default(),
+            endtext: None,
+            endtext_page: 0,
+            readthis: None,
+            readthis_page: 0,
+            highscores: highscore::load(),
+            hs_edit_slot: None,
+            hs_name: String::new(),
+            hs_return: HsReturn::Title,
+            epi_kr_sum: 0,
+            epi_sr_sum: 0,
+            epi_tr_sum: 0,
+            epi_time_sum: 0,
+            epi_count: 0,
             screen: GameScreen::Playing,
             difficulty,
             main_sel: 0,
@@ -414,12 +498,25 @@ impl Game {
             }
             GameScreen::Intermission => self.update_intermission(dt, input),
             GameScreen::GetPsyched => self.update_get_psyched(dt),
+            GameScreen::Death => self.update_death(dt),
+            GameScreen::DeathCam => self.update_deathcam(dt, input),
+            GameScreen::Victory => self.update_victory(dt, input),
+            GameScreen::EndText => self.update_endtext(input),
+            GameScreen::HighScores => self.update_high_scores(input),
+            GameScreen::HighScoreEntry => self.update_high_score_entry(input),
+            GameScreen::ReadThis => self.update_read_this(input),
         }
         // The menu cursor blink advances on the menu screens (not during play or
-        // the intermission / load screens, which run their own clocks).
-        if !matches!(
+        // the intermission / load / endgame screens, which run their own clocks).
+        if matches!(
             self.screen,
-            GameScreen::Playing | GameScreen::Intermission | GameScreen::GetPsyched
+            GameScreen::Title
+                | GameScreen::MainMenu
+                | GameScreen::Episode
+                | GameScreen::Difficulty
+                | GameScreen::Sound
+                | GameScreen::LoadGame
+                | GameScreen::SaveGame
         ) {
             self.menu.tick(dt);
         }
@@ -440,6 +537,7 @@ impl Game {
         ];
         let (timeleft, bonus) = inter::compute_bonus(time_sec, par_sec, ratios[0], ratios[1], ratios[2]);
         self.score += bonus; // GivePoints(bonus)
+        self.accumulate_episode(); // feed the Victory averages (LevelRatios)
 
         let n = self.maps.num_levels();
         let next = if secret {
@@ -484,6 +582,211 @@ impl Game {
     fn update_get_psyched(&mut self, dt: f32) {
         self.psyched_clock += dt;
         if self.psyched_clock >= LOAD_SCREEN_SECS {
+            self.screen = GameScreen::Playing;
+        }
+    }
+
+    // --- Endgame flow (deathcam -> victory -> endtext -> high scores) -------
+
+    /// Fold the just-finished floor's ratios into the running episode totals,
+    /// used for the `Victory` averages (WL_INTER.C `LevelRatios`).
+    fn accumulate_episode(&mut self) {
+        self.epi_kr_sum += self.stats.kill_ratio();
+        self.epi_sr_sum += self.stats.secret_ratio();
+        self.epi_tr_sum += self.stats.treasure_ratio();
+        self.epi_time_sum += (self.stats.time as i32).min(99 * 60);
+        self.epi_count += 1;
+    }
+
+    /// A_StartDeathCam: the episode end boss is dead. Set the victory flag, swing
+    /// the camera onto the boss corpse, and freeze into the deathcam.
+    fn begin_deathcam(&mut self, kind: Kind) {
+        self.victory = true;
+        self.accumulate_episode();
+        if let Some((bx, by)) = self.actors.find_pos(kind) {
+            self.position_deathcam(bx, by);
+        }
+        self.deathcam_clock = 0.0;
+        self.screen = GameScreen::DeathCam;
+    }
+
+    /// Place the camera on the boss->player line a few tiles from the corpse in
+    /// an open tile, looking straight at it (A_StartDeathCam backs the camera off
+    /// until it clears a wall).
+    fn position_deathcam(&mut self, bx: f32, by: f32) {
+        let (px, py) = (self.player.x, self.player.y);
+        // Direction from the boss out toward the player's side of the room.
+        let dir = (py - by).atan2(px - bx);
+        let (mut cx, mut cy) = (px, py);
+        for step in 1..=8 {
+            let d = 1.5 + step as f32 * 0.3;
+            let nx = bx + dir.cos() * d;
+            let ny = by + dir.sin() * d;
+            if self.world.wall_at(nx.floor() as i32, ny.floor() as i32) {
+                break;
+            }
+            cx = nx;
+            cy = ny;
+            if d >= 3.0 {
+                break;
+            }
+        }
+        self.player.x = cx;
+        self.player.y = cy;
+        self.player.angle = (by - cy).atan2(bx - cx);
+    }
+
+    fn update_deathcam(&mut self, dt: f32, input: &Input) {
+        // The corpse keeps falling while the camera watches.
+        let sounds = self.actors.animate_dead(dt / TIC);
+        self.sounds.extend(sounds);
+        self.deathcam_clock += dt;
+        if input.any_key
+            || input.menu_enter
+            || input.fire
+            || input.use_door
+            || self.deathcam_clock >= DEATHCAM_SECS
+        {
+            self.begin_victory();
+        }
+    }
+
+    /// WL_INTER.C `Victory`: compute the averaged episode ratios and show the
+    /// "YOU WIN!" screen.
+    fn begin_victory(&mut self) {
+        let n = self.epi_count.max(1);
+        self.victory_stats = VictoryStats {
+            time_sec: self.epi_time_sum,
+            kill: self.epi_kr_sum / n,
+            secret: self.epi_sr_sum / n,
+            treasure: self.epi_tr_sum / n,
+        };
+        self.screen = GameScreen::Victory;
+    }
+
+    fn update_victory(&mut self, dt: f32, input: &Input) {
+        let sounds = self.actors.animate_dead(dt / TIC);
+        self.sounds.extend(sounds);
+        if input.any_key || input.menu_enter || input.fire || input.use_door {
+            self.begin_endtext();
+        }
+    }
+
+    /// WL_TEXT.C `EndText`: page through the current episode's end article.
+    fn begin_endtext(&mut self) {
+        let episode = self.level_idx / 10;
+        let chunk = T_ENDART1 + episode;
+        self.endtext = Some(TextScreen::new(&self.vga, chunk));
+        self.endtext_page = 0;
+        self.screen = GameScreen::EndText;
+    }
+
+    fn update_endtext(&mut self, input: &Input) {
+        if !(input.any_key || input.menu_enter || input.menu_back || input.fire || input.use_door) {
+            return;
+        }
+        let pages = self.endtext.as_ref().map_or(1, TextScreen::num_pages);
+        if self.endtext_page + 1 < pages {
+            self.endtext_page += 1;
+        } else {
+            self.endtext = None;
+            // The victory run ends at the high-score check, then the title.
+            self.begin_high_score_check(HsReturn::Title);
+        }
+    }
+
+    /// WL_INTER.C `CheckHighScore`: if the run qualifies, drop it on the board
+    /// and enter the name; otherwise just show the board. `ret` is where the
+    /// board returns when dismissed.
+    fn begin_high_score_check(&mut self, ret: HsReturn) {
+        self.hs_return = ret;
+        let completed = self.level_idx as u32 + 1;
+        if let Some(slot) = highscore::insert(&mut self.highscores, self.score, completed) {
+            self.hs_edit_slot = Some(slot);
+            self.hs_name.clear();
+            self.screen = GameScreen::HighScoreEntry;
+        } else {
+            self.hs_edit_slot = None;
+            self.screen = GameScreen::HighScores;
+        }
+    }
+
+    fn update_high_score_entry(&mut self, input: &Input) {
+        if input.menu_enter {
+            if let Some(slot) = self.hs_edit_slot.take() {
+                let name = if self.hs_name.trim().is_empty() {
+                    "Anonymous".to_string()
+                } else {
+                    self.hs_name.clone()
+                };
+                if let Some(e) = self.highscores.get_mut(slot) {
+                    e.name = name;
+                }
+                let _ = highscore::store(&self.highscores);
+            }
+            self.screen = GameScreen::HighScores;
+            return;
+        }
+        if input.backspace {
+            self.hs_name.pop();
+        }
+        if let Some(c) = input.typed
+            && !c.is_control()
+            && self.hs_name.chars().count() < highscore::MAX_HIGH_NAME
+        {
+            self.hs_name.push(c);
+        }
+    }
+
+    fn update_high_scores(&mut self, input: &Input) {
+        if input.any_key || input.menu_enter || input.menu_back {
+            match self.hs_return {
+                HsReturn::Menu => {
+                    self.screen = GameScreen::MainMenu;
+                    self.main_sel = menu::ITEM_VIEWSCORES;
+                }
+                HsReturn::Title => {
+                    self.victory = false;
+                    self.to_title();
+                }
+            }
+        }
+    }
+
+    fn update_read_this(&mut self, input: &Input) {
+        if input.menu_back {
+            self.readthis = None;
+            self.screen = GameScreen::MainMenu;
+            self.main_sel = menu::ITEM_READ;
+            return;
+        }
+        if input.any_key || input.menu_enter || input.fire || input.use_door {
+            let pages = self.readthis.as_ref().map_or(1, TextScreen::num_pages);
+            if self.readthis_page + 1 < pages {
+                self.readthis_page += 1;
+            } else {
+                self.readthis = None;
+                self.screen = GameScreen::MainMenu;
+                self.main_sel = menu::ITEM_READ;
+            }
+        }
+    }
+
+    fn update_death(&mut self, dt: f32) {
+        self.death_clock += dt;
+        if self.death_clock < DEATH_SECS {
+            return;
+        }
+        if self.death_game_over {
+            // Out of lives: game over -> high-score check -> title.
+            self.begin_high_score_check(HsReturn::Title);
+        } else {
+            // Restart the floor with a fresh loadout (the original's respawn).
+            self.load_level();
+            self.health = 100;
+            self.ammo = 8;
+            self.weapon = WEAPON_PISTOL;
+            self.keys = 0;
             self.screen = GameScreen::Playing;
         }
     }
@@ -549,6 +852,16 @@ impl Game {
                     self.ls_sel = 0;
                     self.entering_name = false;
                     self.screen = GameScreen::SaveGame;
+                }
+                menu::ITEM_READ => {
+                    self.readthis = Some(TextScreen::new(&self.vga, T_HELPART));
+                    self.readthis_page = 0;
+                    self.screen = GameScreen::ReadThis;
+                }
+                menu::ITEM_VIEWSCORES => {
+                    self.hs_return = HsReturn::Menu;
+                    self.hs_edit_slot = None;
+                    self.screen = GameScreen::HighScores;
                 }
                 menu::ITEM_QUIT => self.should_quit = true,
                 _ => {}
@@ -663,7 +976,8 @@ impl Game {
     /// Whether the frontend should route key presses to the save-name field
     /// (so gameplay/global shortcuts like `Q`/`M` don't fire while typing).
     pub fn is_text_entry(&self) -> bool {
-        self.screen == GameScreen::SaveGame && self.entering_name
+        (self.screen == GameScreen::SaveGame && self.entering_name)
+            || self.screen == GameScreen::HighScoreEntry
     }
 
     // --- Save-game serialization (see src/savegame.rs) ---------------------
@@ -795,9 +1109,19 @@ impl Game {
         self.weapon = WEAPON_PISTOL;
         self.died = false;
         self.victory = false;
+        self.reset_episode_stats();
         self.load_level();
         self.started = true;
         self.screen = GameScreen::Playing;
+    }
+
+    /// Zero the running per-episode ratio/time accumulation (a fresh episode).
+    fn reset_episode_stats(&mut self) {
+        self.epi_kr_sum = 0;
+        self.epi_sr_sum = 0;
+        self.epi_tr_sum = 0;
+        self.epi_time_sum = 0;
+        self.epi_count = 0;
     }
 
     fn update_play(&mut self, dt: f32, input: &Input) {
@@ -893,14 +1217,19 @@ impl Game {
         }
         self.try_pickups();
 
-        // Killing the floor's end boss wins the episode (in the original the
-        // boss die chain ends in A_StartDeathCam, which sets victoryflag and
-        // plays the deathcam; here the flag is set straight from the kill).
+        // Killing the floor's end boss wins the episode: the original's boss die
+        // chain ends in A_StartDeathCam (deathcam + victoryflag + the episode-end
+        // sequence). Detect it here and swing into the deathcam.
+        let mut boss_killed = None;
         for kind in self.actors.take_deaths() {
             self.stats.kills += 1;
             if Some(kind) == end_boss(self.level_idx) {
-                self.victory = true;
+                boss_killed = Some(kind);
             }
+        }
+        if let Some(kind) = boss_killed {
+            self.begin_deathcam(kind);
+            return;
         }
 
         if self.health <= 0 {
@@ -908,11 +1237,14 @@ impl Game {
             self.died = true;
             self.sounds.push(snd::PLAYERDEATHSND as u8);
             self.lives -= 1;
-            // Restart the level with a fresh loadout (the original's respawn).
-            self.load_level();
-            self.health = 100;
-            self.ammo = 8;
-            self.weapon = WEAPON_PISTOL;
+            // A red-tint pause (WL_GAME.C `Died`), then a floor restart — or,
+            // out of lives, the game-over -> high-score -> title path.
+            self.death_game_over = self.lives < 0;
+            if self.death_game_over {
+                self.sounds.push(snd::GAMEOVERSND as u8);
+            }
+            self.death_clock = 0.0;
+            self.screen = GameScreen::Death;
         }
     }
 
@@ -1168,12 +1500,54 @@ impl Game {
                 self.inter_gfx.render_get_psyched(fb, progress);
                 return;
             }
+            GameScreen::Death => {
+                // The frozen fight view with a deepening red death tint.
+                raycast::render(fb, &self.vswap, &self.world, &mut self.actors, &self.player, VIEW_H);
+                let weapon_sprite =
+                    hud::weapon_ready_sprite(&self.vswap, self.weapon) + self.weapon_frame;
+                hud::draw_weapon(fb, &self.vswap, weapon_sprite);
+                self.draw_hud(fb);
+                let t = (self.death_clock / DEATH_SECS).clamp(0.0, 1.0);
+                red_tint(fb, 0.3 + 0.5 * t);
+                return;
+            }
+            GameScreen::DeathCam => {
+                raycast::render(fb, &self.vswap, &self.world, &mut self.actors, &self.player, VIEW_H);
+                self.inter_gfx.draw_seeagain(fb);
+                return;
+            }
+            GameScreen::Victory => {
+                self.inter_gfx.render_victory(fb, &self.victory_stats);
+                return;
+            }
+            GameScreen::EndText => {
+                if let Some(t) = &self.endtext {
+                    t.render(fb, &self.vga, self.endtext_page);
+                }
+                return;
+            }
+            GameScreen::HighScores | GameScreen::HighScoreEntry => {
+                let editing = self.hs_edit_slot.map(|s| (s, self.hs_name.as_str()));
+                self.inter_gfx.render_high_scores(fb, &self.highscores, editing);
+                return;
+            }
+            GameScreen::ReadThis => {
+                if let Some(t) = &self.readthis {
+                    t.render(fb, &self.vga, self.readthis_page);
+                }
+                return;
+            }
             GameScreen::Playing => {}
         }
         raycast::render(fb, &self.vswap, &self.world, &mut self.actors, &self.player, VIEW_H);
         // The firing animation offsets from the weapon's ready frame.
         let weapon_sprite = hud::weapon_ready_sprite(&self.vswap, self.weapon) + self.weapon_frame;
         hud::draw_weapon(fb, &self.vswap, weapon_sprite);
+        self.draw_hud(fb);
+    }
+
+    /// Draw the status bar from the current player stats.
+    fn draw_hud(&self, fb: &mut Framebuffer) {
         self.hud.draw(
             fb,
             &HudState {
@@ -1186,5 +1560,21 @@ impl Game {
                 keys: self.keys,
             },
         );
+    }
+}
+
+/// Blend the whole framebuffer toward red by `amount` (0..1), the death fizzle
+/// (a cheap stand-in for WL_GAME.C's per-pixel `FizzleFade` to red).
+fn red_tint(fb: &mut Framebuffer, amount: f32) {
+    let a = amount.clamp(0.0, 1.0);
+    for px in fb.pixels.iter_mut() {
+        let r = (*px & 0xFF) as f32;
+        let g = ((*px >> 8) & 0xFF) as f32;
+        let b = ((*px >> 16) & 0xFF) as f32;
+        // Target pure red (0xAA,0,0)-ish.
+        let nr = (r + (170.0 - r) * a) as u32;
+        let ng = (g * (1.0 - a)) as u32;
+        let nb = (b * (1.0 - a)) as u32;
+        *px = 0xFF00_0000 | (nb << 16) | (ng << 8) | nr;
     }
 }

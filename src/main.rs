@@ -424,8 +424,15 @@ impl App {
         // while playing.
         let desired = match screen {
             GameScreen::Title => None,
-            GameScreen::Playing | GameScreen::GetPsyched => Some(sound::song_for_level(level)),
+            GameScreen::Playing
+            | GameScreen::GetPsyched
+            | GameScreen::Death
+            | GameScreen::DeathCam => Some(sound::song_for_level(level)),
             GameScreen::Intermission => Some(sound::ENDLEVEL_MUS),
+            GameScreen::Victory
+            | GameScreen::EndText
+            | GameScreen::HighScores
+            | GameScreen::HighScoreEntry => Some(sound::ULTIMATE_MUS),
             _ => Some(sound::MENU_SONG),
         };
         if desired != self.current_music {

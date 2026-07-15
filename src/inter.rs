@@ -9,10 +9,13 @@
 //! (any key) never changes the total.
 
 use crate::assets::palette::PALETTE;
-use crate::assets::vgagraph::{self, Picture, GETPSYCHEDPIC, L_GUY2PIC, L_GUYPIC, L_NUM0PIC};
+use crate::assets::vgagraph::{
+    self, Picture, GETPSYCHEDPIC, HIGHSCORESPIC, L_BJWINSPIC, L_GUY2PIC, L_GUYPIC, L_NUM0PIC,
+};
 use crate::assets::VgaGraph;
 use crate::fb::{Framebuffer, HEIGHT, WIDTH};
 use crate::font::Font;
+use crate::highscore::HighScore;
 use crate::savegame::{Reader, SaveError, Writer};
 use crate::sound as snd;
 
@@ -116,6 +119,17 @@ impl LevelStats {
             time: r.get_f32()?,
         })
     }
+}
+
+/// The averaged episode figures shown on the "YOU WIN!" screen (WL_INTER.C
+/// `Victory`): the episode's total time and its averaged kill/secret/treasure
+/// ratios.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct VictoryStats {
+    pub time_sec: i32,
+    pub kill: i32,
+    pub secret: i32,
+    pub treasure: i32,
 }
 
 /// WL_INTER.C bonus: `timeleft*PAR_AMOUNT + PERCENT100AMT` per perfect ratio.
@@ -245,6 +259,8 @@ pub struct InterGfx {
     guy: [Picture; 2],
     nums: Vec<Picture>,
     psyched: Picture,
+    bjwin: Picture,
+    highscores: Picture,
 }
 
 impl InterGfx {
@@ -254,6 +270,73 @@ impl InterGfx {
             guy: [vga.pic(L_GUYPIC), vga.pic(L_GUY2PIC)],
             nums: (0..10).map(|d| vga.pic(L_NUM0PIC + d)).collect(),
             psyched: vga.pic(GETPSYCHEDPIC),
+            bjwin: vga.pic(L_BJWINSPIC),
+            highscores: vga.pic(HIGHSCORESPIC),
+        }
+    }
+
+    /// Overlay the deathcam caption (WL_ACT2.C `Write(0,7,STR_SEEAGAIN)`).
+    pub fn draw_seeagain(&self, fb: &mut Framebuffer) {
+        self.font.draw_centered(fb, 8, "LET'S SEE THAT AGAIN", 0x13);
+        self.font.draw_centered(fb, 8 + self.font.height() as i32 + 2, "IN SLOW MOTION...", 0x13);
+    }
+
+    /// WL_INTER.C `Victory`: the blue backdrop, the victorious BJ pic, the
+    /// "YOU WIN!" banner, and the episode's total time plus averaged ratios.
+    pub fn render_victory(&self, fb: &mut Framebuffer, stats: &VictoryStats) {
+        fill(fb, VIEWCOLOR);
+        blit(fb, &self.bjwin, 8, 4);
+        self.font.draw(fb, 18 * 8, 2 * 8, "You Win!", 0x13);
+
+        // Right-hand stats column (WL_INTER.C Write calls).
+        let x = 14 * 8;
+        self.font.draw(fb, x, 9 * 8, "Total Time", 0x17);
+        self.draw_time(fb, 30 * 8, 9 * 8, stats.time_sec);
+        let rows = [
+            ("Average Kill", stats.kill),
+            ("Average Secret", stats.secret),
+            ("Average Treasure", stats.treasure),
+        ];
+        for (i, (label, val)) in rows.iter().enumerate() {
+            let y = (12 + i as i32 * 2) * 8;
+            self.font.draw(fb, x, y, label, 0x17);
+            self.right(fb, 37 * 8, y, &format!("{val}%"));
+        }
+    }
+
+    /// WL_INTER.C `DrawHighScores`: the board header and the seven ranked rows
+    /// (name / level reached / score). `editing` marks a slot mid-name-entry.
+    pub fn render_high_scores(
+        &self,
+        fb: &mut Framebuffer,
+        table: &[HighScore],
+        editing: Option<(usize, &str)>,
+    ) {
+        // The menu-red backdrop with the HIGHSCORES header centered near the top.
+        fill(fb, 0x29);
+        let hx = (WIDTH as i32 - self.highscores.width as i32) / 2;
+        blit(fb, &self.highscores, hx, 8);
+
+        // Column headers.
+        let head_y = 68;
+        self.font.draw(fb, 4 * 8, head_y, "Name", 0x17);
+        self.font.draw(fb, 20 * 8, head_y, "Level", 0x17);
+        self.font.draw(fb, 28 * 8, head_y, "Score", 0x17);
+
+        for (i, e) in table.iter().enumerate() {
+            let y = 78 + i as i32 * 15;
+            let is_edit = editing.map(|(s, _)| s) == Some(i);
+            let color = if is_edit { 0x13 } else { 0x17 };
+            let name = if let Some((_, n)) = editing.filter(|_| is_edit) {
+                format!("{n}_")
+            } else {
+                e.name.clone()
+            };
+            self.font.draw(fb, 4 * 8, y, &name, color);
+            // Level reached, right-aligned in its column.
+            self.right(fb, 24 * 8, y, &e.completed.to_string());
+            // Score, right-aligned to the far column.
+            self.right(fb, 36 * 8, y, &e.score.to_string());
         }
     }
 

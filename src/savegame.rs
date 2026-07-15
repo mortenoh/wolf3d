@@ -127,6 +127,11 @@ impl<'a> Reader<'a> {
         Ok(slice)
     }
 
+    /// Borrow the next `n` bytes (advancing the cursor), erroring if truncated.
+    pub fn get_bytes(&mut self, n: usize) -> Result<&'a [u8], SaveError> {
+        self.take(n)
+    }
+
     pub fn get_u8(&mut self) -> Result<u8, SaveError> {
         Ok(self.take(1)?[0])
     }

@@ -69,8 +69,8 @@ pub const MAIN_ITEMS: [MenuItem; 10] = [
     // state machine greys it via `Game::main_item_active` when not started.
     MenuItem { label: "Save Game", active: true },
     MenuItem { label: "Change View", active: false },
-    MenuItem { label: "Read This!", active: false },
-    MenuItem { label: "View Scores", active: false },
+    MenuItem { label: "Read This!", active: true },
+    MenuItem { label: "View Scores", active: true },
     MenuItem { label: "Back to Demo", active: false },
     MenuItem { label: "Quit", active: true },
 ];
@@ -79,6 +79,8 @@ pub const ITEM_NEW_GAME: usize = 0;
 pub const ITEM_SOUND: usize = 1;
 pub const ITEM_LOAD: usize = 3;
 pub const ITEM_SAVE: usize = 4;
+pub const ITEM_READ: usize = 6;
+pub const ITEM_VIEWSCORES: usize = 7;
 pub const ITEM_QUIT: usize = 9;
 
 pub const NUM_EPISODES: usize = 6;

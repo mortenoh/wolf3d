@@ -880,6 +880,40 @@ impl Actors {
         std::mem::take(&mut self.deaths)
     }
 
+    /// The world position of the first actor of `kind` (used to aim the deathcam
+    /// at a just-killed boss).
+    pub fn find_pos(&self, kind: Kind) -> Option<(f32, f32)> {
+        self.list.iter().find(|a| a.kind == kind).map(|a| (a.x, a.y))
+    }
+
+    /// Advance only the dead actors' death animations by `tics`, running no AI,
+    /// movement, or spawn actions — just the sprite chain and its death-scream
+    /// sounds. Used by the deathcam / victory screens to let a corpse finish
+    /// falling while the simulation is otherwise frozen. Returns emitted sounds.
+    pub fn animate_dead(&mut self, tics: f32) -> Vec<u8> {
+        let mut sounds = Vec::new();
+        for i in 0..self.list.len() {
+            if !self.list[i].dead || self.list[i].ticcount == 0.0 {
+                continue;
+            }
+            self.list[i].ticcount -= tics;
+            while self.list[i].ticcount <= 0.0 {
+                if let Action::DeathScream = self.table.states[self.list[i].state].action {
+                    sounds.push(self.death_sound(self.list[i].kind));
+                }
+                let next = self.table.states[self.list[i].state].next;
+                self.list[i].state = next;
+                let tt = self.table.states[next].tics;
+                if tt == 0 {
+                    self.list[i].ticcount = 0.0;
+                    break;
+                }
+                self.list[i].ticcount += tt as f32;
+            }
+        }
+        sounds
+    }
+
     // --- Save/load (see src/savegame.rs) -----------------------------------
 
     /// Serialize both RNG stream positions and the full actor + projectile

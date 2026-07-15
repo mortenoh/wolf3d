@@ -91,6 +91,18 @@ pub const L_GUYPIC: usize = 43;
 pub const L_NUM0PIC: usize = 45;
 pub const L_GUY2PIC: usize = 84;
 
+/// The victorious-BJ picture on the "YOU WIN!" screen (WL_INTER.C `Victory`).
+pub const L_BJWINSPIC: usize = 85;
+
+/// The high-score board header art (WL_INTER.C `DrawHighScores`).
+pub const HIGHSCORESPIC: usize = 90;
+
+/// End-of-episode article text chunks (GFXV_WL6.H `T_ENDART1..6`), one per
+/// episode; and the "Read This!" help article (`T_HELPART`). These are text
+/// chunks (caret markup), decoded via [`VgaGraph::raw_chunk`], not pictures.
+pub const T_HELPART: usize = 138;
+pub const T_ENDART1: usize = 143;
+
 /// The "Get Psyched!" load screen bar art (GFXV_WL6.H GETPSYCHEDPIC).
 pub const GETPSYCHEDPIC: usize = 134;
 
