@@ -3,7 +3,7 @@
 //! each frame and stretch it onto the window (nearest-neighbor, letterboxed
 //! to 4:3 — the original's display aspect).
 
-use wolf3d::{demo, fb, game, sound};
+use wolf3d::{config, demo, fb, game, sound};
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -262,6 +262,8 @@ struct App {
     /// Sound-menu state last pushed to the backend (re-issue only on change).
     applied_sfx_mode: SfxMode,
     applied_music_on: bool,
+    /// The persistent options last written to disk (re-write only on change).
+    applied_config: config::Config,
     keys: HashSet<KeyCode>,
     use_pressed: bool,
     weapon_pressed: Option<u8>,
@@ -291,6 +293,7 @@ struct App {
 impl App {
     fn new(game: Game, sound: Option<Backend>) -> Self {
         let (sfx_mode, music_on) = (game.sfx_mode, game.music_on);
+        let applied_config = game.config_snapshot();
         Self {
             window: None,
             gpu: None,
@@ -300,6 +303,7 @@ impl App {
             current_music: None,
             applied_sfx_mode: sfx_mode,
             applied_music_on: music_on,
+            applied_config,
             keys: HashSet::new(),
             use_pressed: false,
             weapon_pressed: None,
@@ -384,7 +388,9 @@ impl App {
                 || down(KeyCode::ControlLeft)
                 || down(KeyCode::ControlRight)
                 || self.mouse_fire,
-            turn_delta: std::mem::take(&mut self.mouse_dx) * MOUSE_SENSITIVITY,
+            turn_delta: std::mem::take(&mut self.mouse_dx)
+                * MOUSE_SENSITIVITY
+                * self.game.mouse_sensitivity_scale(),
             menu_up: std::mem::take(&mut self.menu_up),
             menu_down: std::mem::take(&mut self.menu_down),
             menu_left: std::mem::take(&mut self.menu_left),
@@ -397,6 +403,19 @@ impl App {
         };
         self.game.update(dt, &input);
         self.sync_audio();
+        self.persist_config();
+    }
+
+    /// Write the persistent options (view size, sound, music, mouse sensitivity)
+    /// to disk whenever they change (WL_MENU.C wrote CONFIG.WL6 on each edit).
+    fn persist_config(&mut self) {
+        let snap = self.game.config_snapshot();
+        if snap != self.applied_config {
+            self.applied_config = snap;
+            if let Err(e) = config::save(&snap) {
+                eprintln!("failed to save config: {e}");
+            }
+        }
     }
 
     /// Feed the tic's emitted sound events to the backend and keep the music and
@@ -698,6 +717,13 @@ fn main() {
     if let Some(script) = demo_script {
         demo::run(&mut game, &script);
         return;
+    }
+
+    // Load persistent options (view size, sound, music, mouse sensitivity) for
+    // the windowed game only. The demo/tests never read a config, so their
+    // render path stays at the full-size default and remains pixel-identical.
+    if let Some(cfg) = config::load() {
+        game.apply_config(&cfg);
     }
 
     // Open the audio device for the windowed path. Any failure (no device, no

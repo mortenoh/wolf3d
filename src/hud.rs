@@ -126,20 +126,36 @@ fn blit(fb: &mut Framebuffer, pic: &vgagraph::Picture, dx: usize, dy: usize) {
     }
 }
 
-/// Draw the current weapon's ready sprite (VSWAP, 64x64, column-major) scaled
-/// 2x, centered horizontally, its base resting on the bottom of the 3D view.
+/// Draw the current weapon's ready sprite (VSWAP, 64x64, column-major),
+/// centered in the 3D view rectangle with its base resting on the view's
+/// bottom. The sprite scales with the view width so a shrunken view keeps the
+/// weapon in proportion; at full size (view_x 0, view_w WIDTH, base VIEW_H) this
+/// is pixel-identical to the classic 2x, floor-at-VIEW_H placement.
 /// Transparent texels (0) are skipped.
-pub fn draw_weapon(fb: &mut Framebuffer, vswap: &VSwap, sprite: usize) {
-    const SCALE: usize = 2;
-    let dim = TEX_SIZE * SCALE; // 128
-    let x0 = (WIDTH - dim) / 2; // centered
-    let y0 = VIEW_H - dim; // base at row VIEW_H
+pub fn draw_weapon(
+    fb: &mut Framebuffer,
+    vswap: &VSwap,
+    sprite: usize,
+    view_x: usize,
+    view_bottom: usize,
+    view_w: usize,
+) {
+    // 128px (2x) at the full 320-wide view; proportional below that.
+    let dim = view_w * (TEX_SIZE * 2) / WIDTH;
+    if dim == 0 {
+        return;
+    }
+    let x0 = view_x + (view_w - dim) / 2; // centered in the view
+    let y0 = view_bottom - dim; // base at the view's bottom
     let tex = &vswap.sprites[sprite];
     for py in 0..dim {
-        let sy = py / SCALE;
+        let sy = py * TEX_SIZE / dim;
         let dest_y = y0 + py;
+        if dest_y >= crate::fb::HEIGHT {
+            break;
+        }
         for px in 0..dim {
-            let sx = px / SCALE;
+            let sx = px * TEX_SIZE / dim;
             let c = tex[sx * TEX_SIZE + sy]; // sprites are column-major
             if c != 0 {
                 fb.pixels[dest_y * WIDTH + x0 + px] = c;

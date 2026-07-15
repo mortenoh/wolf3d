@@ -149,6 +149,9 @@ enum Think {
     SchabbChase,
     /// T_Fake: lower attack chance, always dodges.
     FakeChase,
+    /// T_Ghosts: chase the player through the maze (SelectChaseDir, walls
+    /// respected — ghosts do NOT phase through walls); no attack, no dodge.
+    GhostChase,
 }
 
 /// Movement/attack model used by `t_chase` (which original T_* think ran).
@@ -203,6 +206,10 @@ struct KindStates {
 }
 
 /// Regular enemies plus every WL6 boss.
+///
+/// New variants are appended at the end so their [`Kind::index`] values (the
+/// save-game encoding) never shift; a save from before the ghosts were added
+/// still decodes bit-identically, so the format version needs no bump.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     Guard,
@@ -218,9 +225,16 @@ pub enum Kind {
     Gretel,      // gretelobj, E5M9
     Gift,        // giftobj, E4M9
     Fat,         // fatobj, E6M9
+    // Pac-Man ghosts (ghostobj), E3M10. Not shootable, not killable; they chase
+    // through the maze and damage the player on contact (WL_ACT2.C SpawnGhosts,
+    // WL_STATE.C T_Ghosts / MoveObj).
+    Blinky, // spawn code 224
+    Clyde,  // spawn code 225
+    Pinky,  // spawn code 226
+    Inky,   // spawn code 227
 }
 
-const NUM_KINDS: usize = 13;
+const NUM_KINDS: usize = 17;
 
 impl Kind {
     fn index(self) -> usize {
@@ -238,6 +252,10 @@ impl Kind {
             Kind::Gretel => 10,
             Kind::Gift => 11,
             Kind::Fat => 12,
+            Kind::Blinky => 13,
+            Kind::Clyde => 14,
+            Kind::Pinky => 15,
+            Kind::Inky => 16,
         }
     }
     /// Inverse of [`Kind::index`], for save-game decoding.
@@ -256,8 +274,18 @@ impl Kind {
             10 => Kind::Gretel,
             11 => Kind::Gift,
             12 => Kind::Fat,
+            13 => Kind::Blinky,
+            14 => Kind::Clyde,
+            15 => Kind::Pinky,
+            16 => Kind::Inky,
             _ => return Err(SaveError::BadEnum("actor kind")),
         })
+    }
+
+    /// A Pac-Man ghost (ghostobj): floats after the player through the maze,
+    /// cannot be shot or killed, and hurts on contact.
+    pub fn is_ghost(self) -> bool {
+        matches!(self, Kind::Blinky | Kind::Clyde | Kind::Pinky | Kind::Inky)
     }
     /// starthitpoints[gd_hard][kind] from WL_ACT2.C ("death incarnate" tier);
     /// the real Hitler uses A_HitlerMorph's own table {500,700,800,900}.
@@ -276,6 +304,8 @@ impl Kind {
             Kind::Gretel => 1200,
             Kind::Gift => 1200,
             Kind::Fat => 1200,
+            // Ghosts have no FL_SHOOTABLE flag, so hitpoints are never consulted.
+            Kind::Blinky | Kind::Clyde | Kind::Pinky | Kind::Inky => 0,
         }
     }
     /// GivePoints on kill (WL_STATE.C KillActor). Bosses score 5000 except the
@@ -556,9 +586,30 @@ fn build_states() -> StateTable {
           (405, 10, A::None), (406, 10, A::None), (407, 0, A::None)],
     );
 
+    // Pac-Man ghosts (WL_ACT2.C s_blinkychase1 .. s_inkychase2): a bare 2-frame
+    // chase loop (10 tics each), single-view art (no rotation), running the
+    // T_Ghosts think. No stand / pain / attack / die states — ghosts spawn
+    // straight into the chase and never leave it. The unused KindStates slots
+    // all point at chase1 so every index is valid.
+    let push_ghost = |v: &mut Vec<State>, w1: u16| -> KindStates {
+        let b = v.len();
+        v.push(State { sprite: w1, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b + 1 });
+        v.push(State { sprite: w1 + 1, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b });
+        KindStates { stand: b, path1: b, chase1: b, attack1: b, die1: b, pain: b, pain1: b }
+    };
+    // SPR_BLINKY_W1=288, SPR_PINKY_W1=290, SPR_CLYDE_W1=292, SPR_INKY_W1=294
+    // (WL_DEF.H, the eight sprites directly before SPR_BOSS_W1=296).
+    let blinky = push_ghost(&mut v, 288);
+    let clyde = push_ghost(&mut v, 292);
+    let pinky = push_ghost(&mut v, 290);
+    let inky = push_ghost(&mut v, 294);
+
     StateTable {
         states: v,
-        kinds: [guard, officer, ss, dog, mutant, hans, schabbs, fake, mecha, hitler, gretel, gift, fat],
+        kinds: [
+            guard, officer, ss, dog, mutant, hans, schabbs, fake, mecha, hitler, gretel, gift, fat,
+            blinky, clyde, pinky, inky,
+        ],
     }
 }
 
@@ -721,7 +772,8 @@ fn alert_sound(kind: Kind) -> Option<u8> {
         Kind::Schabbs => snd::SCHABBSHASND as u8,
         Kind::FakeHitler => snd::TOT_HUNDSND as u8,
         Kind::MechaHitler | Kind::Hitler => snd::DIESND as u8,
-        Kind::Mutant => return None,
+        // The mutant and the ghosts never run FirstSighting (silent alert).
+        Kind::Mutant | Kind::Blinky | Kind::Clyde | Kind::Pinky | Kind::Inky => return None,
     })
 }
 
@@ -780,6 +832,32 @@ impl Actors {
                     flags: 0,
                     reaction: 0.0,
                     dead: true,
+                    visible: false,
+                });
+                continue;
+            }
+            if let Some(kind) = decode_ghost_spawn(code) {
+                // SpawnGhosts (WL_ACT2.C): spawn straight into the chase loop at
+                // SPDDOG, facing east, FL_AMBUSH set but NOT FL_SHOOTABLE — so a
+                // ghost can never be shot and never enters SightPlayer. It carries
+                // no hitpoints (never damaged) and is excluded from the kill total.
+                let kd = table.kinds[kind.index()];
+                list.push(Actor {
+                    kind,
+                    x: tx as f32 + 0.5,
+                    y: ty as f32 + 0.5,
+                    tilex: tx,
+                    tiley: ty,
+                    dir: EAST,
+                    state: kd.chase1,
+                    ticcount: table.states[kd.chase1].tics as f32,
+                    health: 0,
+                    speed: SPD_DOG,
+                    distance: 0.0,
+                    waiting_door: None,
+                    flags: FL_AMBUSH,
+                    reaction: 0.0,
+                    dead: false,
                     visible: false,
                 });
                 continue;
@@ -1173,6 +1251,7 @@ impl Actors {
             Think::DogChase => self.t_chase(i, tics, world, px, py, ptx, pty, Chase::Dog),
             Think::SchabbChase => self.t_chase(i, tics, world, px, py, ptx, pty, Chase::Schabb),
             Think::FakeChase => self.t_chase(i, tics, world, px, py, ptx, pty, Chase::Fake),
+            Think::GhostChase => self.t_ghost(i, tics, world, px, py, ptx, pty),
         }
     }
 
@@ -1299,7 +1378,7 @@ impl Actors {
                 return;
             }
             if move_left < self.list[i].distance {
-                self.move_obj(i, move_left, px, py);
+                self.move_obj(i, move_left, tics, px, py);
                 break;
             }
             move_left -= self.list[i].distance;
@@ -1388,12 +1467,39 @@ impl Actors {
                 return;
             }
             if move_left < self.list[i].distance {
-                self.move_obj(i, move_left, px, py);
+                self.move_obj(i, move_left, tics, px, py);
                 break;
             }
             move_left -= self.list[i].distance;
             self.snap_to_goal(i);
             pick(self, world, true);
+            if self.list[i].dir == NODIR {
+                return;
+            }
+        }
+    }
+
+    /// T_Ghosts (WL_STATE.C): a Pac-Man ghost picks a chase direction toward the
+    /// player (SelectChaseDir, respecting walls via TryWalk/CHECKSIDE — ghosts do
+    /// NOT phase through walls) and glides at SPDDOG. No sighting, no attack, no
+    /// dodge; the contact damage is applied inside [`Actors::move_obj`].
+    #[allow(clippy::too_many_arguments)]
+    fn t_ghost(&mut self, i: usize, tics: f32, world: &mut World, px: f32, py: f32, ptx: i32, pty: i32) {
+        if self.list[i].dir == NODIR {
+            self.select_chase_dir(i, world, ptx, pty);
+            if self.list[i].dir == NODIR {
+                return;
+            }
+        }
+        let mut move_left = self.list[i].speed / TILE_GLOBAL * tics;
+        while move_left > 0.0 {
+            if move_left < self.list[i].distance {
+                self.move_obj(i, move_left, tics, px, py);
+                break;
+            }
+            move_left -= self.list[i].distance;
+            self.snap_to_goal(i);
+            self.select_chase_dir(i, world, ptx, pty);
             if self.list[i].dir == NODIR {
                 return;
             }
@@ -1420,8 +1526,10 @@ impl Actors {
     }
 
     /// MoveObj: slide `move` along `dir`, backing off if it would enter the
-    /// player's personal space.
-    fn move_obj(&mut self, i: usize, mv: f32, px: f32, py: f32) {
+    /// player's personal space. `tics` is the frame's tic count, used for the
+    /// ghost contact damage. Backing off only happens while the actor is in the
+    /// player's area (WL_STATE.C MoveObj gates on `areabyplayer`).
+    fn move_obj(&mut self, i: usize, mv: f32, tics: f32, px: f32, py: f32) {
         let (dx, dy) = dir_delta(self.list[i].dir);
         self.list[i].x += dx as f32 * mv;
         self.list[i].y += dy as f32 * mv;
@@ -1433,6 +1541,11 @@ impl Actors {
             && (ax - px).abs() <= MIN_ACTOR_DIST
             && (ay - py).abs() <= MIN_ACTOR_DIST
         {
+            // A ghost hurts the player on contact then keeps moving (WL_STATE.C
+            // MoveObj: `TakeDamage(tics*2,ob)` for ghostobj/spectreobj).
+            if self.list[i].kind.is_ghost() {
+                self.damage += (tics * 2.0) as i32;
+            }
             // Back up — don't stand on the player.
             self.list[i].x -= dx as f32 * mv;
             self.list[i].y -= dy as f32 * mv;
@@ -1836,6 +1949,8 @@ impl Actors {
             Kind::Gretel => snd::MEINSND as u8,
             Kind::Gift => snd::DONNERSND as u8,
             Kind::Fat => snd::ROSESND as u8,
+            // Ghosts never die; this arm only exists for exhaustiveness.
+            Kind::Blinky | Kind::Clyde | Kind::Pinky | Kind::Inky => snd::DOGDEATHSND as u8,
         }
     }
 
@@ -2053,6 +2168,18 @@ fn decode_boss_spawn(code: u16) -> Option<(Kind, u8)> {
         197 => (Kind::Gretel, NORTH),
         215 => (Kind::Gift, NORTH),
         179 => (Kind::Fat, SOUTH),
+        _ => return None,
+    })
+}
+
+/// Decode a Pac-Man ghost spawn code (WL_GAME.C ScanInfoPlane): 224 Blinky,
+/// 225 Clyde, 226 Pinky, 227 Inky. These appear only on E3M10 (level index 29).
+fn decode_ghost_spawn(code: u16) -> Option<Kind> {
+    Some(match code {
+        224 => Kind::Blinky,
+        225 => Kind::Clyde,
+        226 => Kind::Pinky,
+        227 => Kind::Inky,
         _ => return None,
     })
 }

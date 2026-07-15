@@ -3,6 +3,7 @@
 //! demo driver synthesizes it. Both run exactly the same code.
 
 use crate::actors::{Actors, Kind};
+use crate::config::{self, Config, MAX_MOUSE_SENS, MAX_VIEW, MIN_VIEW, VIEW_STEP};
 use crate::assets::vgagraph::{T_ENDART1, T_HELPART};
 use crate::assets::{self, MapSet, VSwap, VgaGraph};
 use crate::fb::Framebuffer;
@@ -114,6 +115,12 @@ pub enum GameScreen {
     /// The level-select cheat screen (the 6 key during play): a 6x10
     /// episode/floor grid; Enter warps, keeping the current stats.
     LevelSelect,
+    /// The Change View screen (WL_MENU.C CP_ChangeView): left/right resize the
+    /// 3D viewport, previewed live over the current world.
+    ChangeView,
+    /// The Control screen (WL_MENU.C CP_Control): the mouse-sensitivity slider
+    /// (full key rebinding is out of scope).
+    Control,
 }
 
 /// Skill level (WL_DEF.H `gd_*`). Controls enemy spawns (see
@@ -205,7 +212,11 @@ fn bonus_sound(bonus: Bonus) -> u8 {
 /// ScanInfoPlane): every live enemy spawned (corpses excluded), every plane-1
 /// PUSHABLETILE marker, and every treasure static.
 fn compute_stats(world: &World, actors: &Actors) -> LevelStats {
-    let kill_total = actors.list.iter().filter(|a| !a.dead).count() as i32;
+    // Pac-Man ghosts (E3M10) can never be killed, so they are excluded from the
+    // kill total — otherwise 100% kills would be unreachable on that floor. (The
+    // original's SpawnGhosts does `killtotal++`, an oversight that makes E3M10's
+    // kill ratio cap below 100%; we intentionally deviate to keep the stat sane.)
+    let kill_total = actors.list.iter().filter(|a| !a.dead && !a.kind.is_ghost()).count() as i32;
     let secret_total = world.level.plane1.iter().filter(|&&c| c == 98).count() as i32;
     let treasure_total = world.statics.iter().filter(|s| is_treasure(s.bonus)).count() as i32;
     LevelStats { kill_total, secret_total, treasure_total, ..Default::default() }
@@ -309,6 +320,14 @@ pub struct Game {
     pub entering_name: bool,
     /// The slot-name text buffer being typed.
     pub save_name: String,
+
+    // --- Persistent options (Change View / Control / Sound; see config.rs) ---
+    /// 3D view width in pixels (64..=320, multiple of 16). Full width is the
+    /// default and keeps the render path pixel-identical for the demo/tests.
+    pub view_size: usize,
+    /// Mouse-look sensitivity slider, 0..=20 (Control menu). The frontend reads
+    /// [`Game::mouse_sensitivity_scale`] to size raw mouse motion.
+    pub mouse_sensitivity: usize,
 
     // --- Sound options (consumed by the frontend audio path) ---
     /// Sound-effects playback mode (Sound menu effects group).
@@ -419,6 +438,8 @@ impl Game {
             save_slots: vec![None; savegame::NUM_SLOTS],
             entering_name: false,
             save_name: String::new(),
+            view_size: MAX_VIEW,
+            mouse_sensitivity: config::DEFAULT_MOUSE_SENS,
             sfx_mode: SfxMode::DigiAdlib,
             music_on: true,
             started: true,
@@ -518,6 +539,8 @@ impl Game {
             GameScreen::HighScoreEntry => self.update_high_score_entry(input),
             GameScreen::ReadThis => self.update_read_this(input),
             GameScreen::LevelSelect => self.update_level_select(input),
+            GameScreen::ChangeView => self.update_change_view(input),
+            GameScreen::Control => self.update_control(input),
         }
         // The menu cursor blink advances on the menu screens (not during play or
         // the intermission / load / endgame screens, which run their own clocks).
@@ -530,6 +553,8 @@ impl Game {
                 | GameScreen::Sound
                 | GameScreen::LoadGame
                 | GameScreen::SaveGame
+                | GameScreen::ChangeView
+                | GameScreen::Control
         ) {
             self.menu.tick(dt);
         }
@@ -886,6 +911,8 @@ impl Game {
                     self.sound_sel = self.sfx_mode as usize;
                     self.screen = GameScreen::Sound;
                 }
+                menu::ITEM_CONTROL => self.screen = GameScreen::Control,
+                menu::ITEM_CHANGEVIEW => self.screen = GameScreen::ChangeView,
                 menu::ITEM_LOAD => {
                     self.refresh_slots();
                     self.ls_sel = 0;
@@ -937,6 +964,86 @@ impl Game {
                 _ => self.music_on = false,
             }
         }
+    }
+
+    // --- Change View (WL_MENU.C CP_ChangeView) -----------------------------
+
+    /// Left/right resize the 3D viewport in 16px steps between 64 and 320 wide;
+    /// Esc/Enter returns to the main menu. The change is live-previewed by
+    /// [`Game::render`], which draws the world into the sized rect.
+    fn update_change_view(&mut self, input: &Input) {
+        if input.menu_left && self.view_size > MIN_VIEW {
+            self.view_size -= VIEW_STEP;
+            self.sounds.push(snd::HITWALLSND as u8);
+        }
+        if input.menu_right && self.view_size < MAX_VIEW {
+            self.view_size += VIEW_STEP;
+            self.sounds.push(snd::HITWALLSND as u8);
+        }
+        if input.menu_back || input.menu_enter {
+            self.screen = GameScreen::MainMenu;
+            self.main_sel = menu::ITEM_CHANGEVIEW;
+        }
+    }
+
+    // --- Control (WL_MENU.C CP_Control, simplified) ------------------------
+
+    /// The mouse-sensitivity slider (0..=20); left/right adjust it. Full key
+    /// rebinding is out of scope. Esc/Enter returns to the main menu.
+    fn update_control(&mut self, input: &Input) {
+        if input.menu_left && self.mouse_sensitivity > 0 {
+            self.mouse_sensitivity -= 1;
+        }
+        if input.menu_right && self.mouse_sensitivity < MAX_MOUSE_SENS {
+            self.mouse_sensitivity += 1;
+        }
+        if input.menu_back || input.menu_enter {
+            self.screen = GameScreen::MainMenu;
+            self.main_sel = menu::ITEM_CONTROL;
+        }
+    }
+
+    /// The 3D-view rectangle (x, y, width, height) inside the play area, from the
+    /// configured [`Game::view_size`]. The height is half the width (the
+    /// original's HEIGHTRATIO), centered in the top `VIEW_H` rows. At full size
+    /// this is (0, 0, WIDTH, VIEW_H).
+    pub fn view_rect(&self) -> (usize, usize, usize, usize) {
+        let w = self.view_size.clamp(MIN_VIEW, MAX_VIEW);
+        let h = (w / 2).min(VIEW_H);
+        let x = (crate::fb::WIDTH - w) / 2;
+        let y = (VIEW_H - h) / 2;
+        (x, y, w, h)
+    }
+
+    /// The mouse-look scale the frontend applies to raw mouse counts: the base
+    /// sensitivity times the slider position over its midpoint, so the default
+    /// slider (10) reproduces the historical feel exactly.
+    pub fn mouse_sensitivity_scale(&self) -> f32 {
+        self.mouse_sensitivity as f32 / config::DEFAULT_MOUSE_SENS as f32
+    }
+
+    /// Snapshot the persistent options into a [`Config`] (for the frontend to
+    /// write to disk when they change).
+    pub fn config_snapshot(&self) -> Config {
+        Config {
+            view_size: self.view_size,
+            sfx_mode: self.sfx_mode as u8,
+            music_on: self.music_on,
+            mouse_sensitivity: self.mouse_sensitivity,
+        }
+    }
+
+    /// Apply a loaded [`Config`] to the live options (called by the frontend at
+    /// boot). Headless tests never call this, so they keep the full-size defaults.
+    pub fn apply_config(&mut self, c: &Config) {
+        self.view_size = c.view_size.clamp(MIN_VIEW, MAX_VIEW);
+        self.mouse_sensitivity = c.mouse_sensitivity.min(MAX_MOUSE_SENS);
+        self.sfx_mode = match c.sfx_mode {
+            1 => SfxMode::AdlibOnly,
+            2 => SfxMode::Off,
+            _ => SfxMode::DigiAdlib,
+        };
+        self.music_on = c.music_on;
     }
 
     // --- Load / Save (WL_MENU.C CP_LoadGame / CP_SaveGame) ------------------
@@ -1546,18 +1653,29 @@ impl Game {
             }
             GameScreen::Death => {
                 // The frozen fight view with a deepening red death tint.
-                raycast::render(fb, &self.vswap, &self.world, &mut self.actors, &self.player, VIEW_H);
-                let weapon_sprite =
-                    hud::weapon_ready_sprite(&self.vswap, self.weapon) + self.weapon_frame;
-                hud::draw_weapon(fb, &self.vswap, weapon_sprite);
-                self.draw_hud(fb);
+                self.render_world(fb);
                 let t = (self.death_clock / DEATH_SECS).clamp(0.0, 1.0);
                 red_tint(fb, 0.3 + 0.5 * t);
                 return;
             }
             GameScreen::DeathCam => {
-                raycast::render(fb, &self.vswap, &self.world, &mut self.actors, &self.player, VIEW_H);
+                let (vx, vy, vw, vh) = self.view_rect();
+                if !(vx == 0 && vy == 0 && vw == crate::fb::WIDTH && vh == VIEW_H) {
+                    raycast::draw_play_border(fb, vx, vy, vw, vh, VIEW_H);
+                }
+                raycast::render(fb, &self.vswap, &self.world, &mut self.actors, &self.player, vx, vy, vw, vh);
                 self.inter_gfx.draw_seeagain(fb);
+                return;
+            }
+            GameScreen::ChangeView => {
+                // Live preview: draw the world at the chosen size, then the
+                // caption band over the top.
+                self.render_world(fb);
+                self.menu.render_change_view(fb, self.view_size);
+                return;
+            }
+            GameScreen::Control => {
+                self.menu.render_control(fb, self.mouse_sensitivity);
                 return;
             }
             GameScreen::Victory => {
@@ -1590,10 +1708,23 @@ impl Game {
             }
             GameScreen::Playing => {}
         }
-        raycast::render(fb, &self.vswap, &self.world, &mut self.actors, &self.player, VIEW_H);
+        self.render_world(fb);
+    }
+
+    /// Draw the first-person view: the grey border (only when the view is
+    /// shrunk), the raycast scene into the configured rectangle, the weapon
+    /// overlay, and the status bar. At full size this is the classic
+    /// full-screen path, pixel-for-pixel.
+    fn render_world(&mut self, fb: &mut Framebuffer) {
+        let (vx, vy, vw, vh) = self.view_rect();
+        let full = vx == 0 && vy == 0 && vw == crate::fb::WIDTH && vh == VIEW_H;
+        if !full {
+            raycast::draw_play_border(fb, vx, vy, vw, vh, VIEW_H);
+        }
+        raycast::render(fb, &self.vswap, &self.world, &mut self.actors, &self.player, vx, vy, vw, vh);
         // The firing animation offsets from the weapon's ready frame.
         let weapon_sprite = hud::weapon_ready_sprite(&self.vswap, self.weapon) + self.weapon_frame;
-        hud::draw_weapon(fb, &self.vswap, weapon_sprite);
+        hud::draw_weapon(fb, &self.vswap, weapon_sprite, vx, vy + vh, vw);
         self.draw_hud(fb);
     }
 

@@ -16,6 +16,7 @@ use crate::assets::vgagraph::{
 use crate::assets::VgaGraph;
 use crate::fb::{Framebuffer, HEIGHT, WIDTH};
 use crate::font::Font;
+use crate::config::MAX_MOUSE_SENS;
 use crate::game::SfxMode;
 use crate::savegame::NUM_SLOTS;
 
@@ -63,12 +64,12 @@ pub struct MenuItem {
 pub const MAIN_ITEMS: [MenuItem; 10] = [
     MenuItem { label: "New Game", active: true },
     MenuItem { label: "Sound", active: true },
-    MenuItem { label: "Control", active: false },
+    MenuItem { label: "Control", active: true },
     MenuItem { label: "Load Game", active: true },
     // Save Game is only reachable from the pause menu during play; the game
     // state machine greys it via `Game::main_item_active` when not started.
     MenuItem { label: "Save Game", active: true },
-    MenuItem { label: "Change View", active: false },
+    MenuItem { label: "Change View", active: true },
     MenuItem { label: "Read This!", active: true },
     MenuItem { label: "View Scores", active: true },
     MenuItem { label: "Back to Demo", active: false },
@@ -77,8 +78,10 @@ pub const MAIN_ITEMS: [MenuItem; 10] = [
 /// Indices of the wired main-menu entries for the game state machine.
 pub const ITEM_NEW_GAME: usize = 0;
 pub const ITEM_SOUND: usize = 1;
+pub const ITEM_CONTROL: usize = 2;
 pub const ITEM_LOAD: usize = 3;
 pub const ITEM_SAVE: usize = 4;
+pub const ITEM_CHANGEVIEW: usize = 5;
 pub const ITEM_READ: usize = 6;
 pub const ITEM_VIEWSCORES: usize = 7;
 pub const ITEM_QUIT: usize = 9;
@@ -309,6 +312,49 @@ impl Menu {
 
         let name = names.get(selected).map(String::as_str).unwrap_or("?");
         self.font.draw_centered(fb, GRID_Y + 11 * ROW_H + 4, name, HIGHLIGHT);
+    }
+
+    /// Change View (WL_MENU.C CP_ChangeView): a caption band drawn over the live
+    /// 3D-view preview (the world is already rendered at the chosen size). Shows
+    /// the size step and the arrow controls.
+    pub fn render_change_view(&self, fb: &mut Framebuffer, view_w: usize) {
+        bar(fb, 0, 0, WIDTH as i32, 22, 0);
+        hlin(fb, 0, WIDTH as i32 - 1, 22, STRIPE);
+        self.font.draw_centered(fb, 2, "Change View - Left / Right to size", HIGHLIGHT);
+        let size = view_w / 16; // 4..=20 (original's ChangeView units)
+        self.font.draw_centered(
+            fb,
+            2 + self.font.height() as i32,
+            &format!("< {size} >   (Enter / Esc accepts)"),
+            TEXTCOLOR,
+        );
+    }
+
+    /// Control (WL_MENU.C CP_Control, simplified): a mouse-sensitivity slider
+    /// (0..=20) with a footer that documents the play shortcuts. Full key
+    /// rebinding is intentionally out of scope.
+    pub fn render_control(&self, fb: &mut Framebuffer, sensitivity: usize) {
+        clear(fb, BORDCOLOR);
+        draw_stripes(fb, 10);
+        self.font.draw_centered(fb, 34, "CONTROL", HIGHLIGHT);
+
+        draw_window(fb, 40, 58, 240, 44, BKGDCOLOR);
+        self.font.draw(fb, 52, 64, "Mouse Sensitivity", TEXTCOLOR);
+
+        // Slider track (0..=20) with a highlight knob.
+        let track_x = 52;
+        let track_y = 84;
+        let track_w = 190;
+        bar(fb, track_x, track_y, track_w, 4, DEACTIVE);
+        let knob = track_x + sensitivity as i32 * (track_w - 6) / MAX_MOUSE_SENS as i32;
+        bar(fb, knob, track_y - 4, 6, 12, HIGHLIGHT);
+        self.font.draw(fb, track_x + track_w + 8, track_y - 4, &format!("{sensitivity}"), HIGHLIGHT);
+
+        let fy = 118;
+        self.font.draw_centered(fb, fy, "Left / Right adjust  -  Enter / Esc accepts", TEXTCOLOR);
+        self.font.draw_centered(fb, fy + 13, "Key rebinding not available", DEACTIVE);
+        self.font.draw_centered(fb, fy + 30, "Shortcuts:  M music   6 warp   7 god", TEXTCOLOR);
+        self.font.draw_centered(fb, fy + 43, "8 items   9 infinite ammo   0 all", TEXTCOLOR);
     }
 
     pub fn render_load(&self, fb: &mut Framebuffer, slots: &[Option<String>], selected: usize) {

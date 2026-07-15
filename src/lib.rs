@@ -3,6 +3,7 @@
 
 pub mod actors;
 pub mod assets;
+pub mod config;
 pub mod demo;
 pub mod fb;
 pub mod font;

@@ -1035,42 +1035,121 @@ fn pushwall_slab_hit(
     Some(Hit { perp: slab_t.max(1e-4), texture, tex_u })
 }
 
-/// Render the 3D view into the top `view_h` rows of the framebuffer, leaving
-/// the rows below untouched for the HUD. Wall/sprite projection scales to
-/// `view_h`, so shrinking the view letterboxes rather than crops.
+/// The grey palette bytes of the beveled 3D-view border (WL_MAIN.C
+/// DrawPlayBorder look): a flat medium-grey field with a dark top/left edge and
+/// a light bottom/right edge, framing the view in black. Exposed so the HUD and
+/// tests can reference the fill color.
+pub const BORDER_FILL: u8 = 0x18; // 125,125,125 medium grey
+const BORDER_DARK: u8 = 0x1f; // 32,32,32 shadow (top/left)
+const BORDER_LIGHT: u8 = 0x10; // 239,239,239 highlight (bottom/right)
+
+/// Fill the play area (the top [`crate::hud::VIEW_H`] rows) with the grey border
+/// and frame a black hole where the shrunken 3D view will be drawn. A no-op
+/// visually at full size (the view covers the whole area), so callers can always
+/// draw it before [`render`].
+pub fn draw_play_border(
+    fb: &mut Framebuffer,
+    view_x: usize,
+    view_y: usize,
+    view_w: usize,
+    view_h: usize,
+    play_h: usize,
+) {
+    let fill = crate::assets::palette::PALETTE[BORDER_FILL as usize];
+    for row in 0..play_h {
+        let base = row * WIDTH;
+        fb.pixels[base..base + WIDTH].fill(fill);
+    }
+    // Black backdrop for the view itself, plus a 1px beveled frame around it.
+    let (x0, y0) = (view_x, view_y);
+    let (x1, y1) = (view_x + view_w, view_y + view_h);
+    let black = crate::assets::palette::PALETTE[0];
+    for row in y0..y1 {
+        let base = row * WIDTH + x0;
+        fb.pixels[base..base + view_w].fill(black);
+    }
+    let dark = crate::assets::palette::PALETTE[BORDER_DARK as usize];
+    let light = crate::assets::palette::PALETTE[BORDER_LIGHT as usize];
+    // Top / left edge (dark), bottom / right edge (light).
+    if y0 > 0 {
+        for x in x0.saturating_sub(1)..=x1.min(WIDTH - 1) {
+            fb.pixels[(y0 - 1) * WIDTH + x] = dark;
+        }
+    }
+    if x0 > 0 {
+        for y in y0.saturating_sub(1)..y1 {
+            fb.pixels[y * WIDTH + x0 - 1] = dark;
+        }
+    }
+    if y1 < play_h {
+        for x in x0.saturating_sub(1)..=x1.min(WIDTH - 1) {
+            fb.pixels[y1 * WIDTH + x] = light;
+        }
+    }
+    if x1 < WIDTH {
+        for y in y0..=y1.min(play_h - 1) {
+            fb.pixels[y * WIDTH + x1] = light;
+        }
+    }
+}
+
+/// Render the 3D view into the rectangle (`view_x`, `view_y`, `view_w`,
+/// `view_h`) of the framebuffer, leaving everything else untouched. Wall/sprite
+/// projection scales to the rectangle, so shrinking the view letterboxes rather
+/// than crops. At full size (0, 0, WIDTH, view_h) this is pixel-identical to the
+/// classic full-screen path.
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     fb: &mut Framebuffer,
     vswap: &VSwap,
     world: &World,
     actors: &mut crate::actors::Actors,
     p: &Player,
+    view_x: usize,
+    view_y: usize,
+    view_w: usize,
     view_h: usize,
 ) {
+    let view_wf = view_w as f32;
     let view_hf = view_h as f32;
+    let view_yf = view_y as f32;
 
-    // Ceiling / floor halves of the 3D view.
-    fb.pixels[..WIDTH * (view_h / 2)].fill(CEILING);
-    fb.pixels[WIDTH * (view_h / 2)..WIDTH * view_h].fill(FLOOR);
+    // Ceiling / floor halves of the 3D view (only within the view rectangle).
+    let ceil = CEILING;
+    let floor = FLOOR;
+    let half = view_h / 2;
+    for row in view_y..view_y + half {
+        let base = row * WIDTH + view_x;
+        fb.pixels[base..base + view_w].fill(ceil);
+    }
+    for row in view_y + half..view_y + view_h {
+        let base = row * WIDTH + view_x;
+        fb.pixels[base..base + view_w].fill(floor);
+    }
 
-    // Perpendicular wall distance per column, for sprite occlusion.
+    // Perpendicular wall distance per view column (indexed 0..view_w), for
+    // sprite occlusion.
     let mut zbuf = [f32::MAX; WIDTH];
 
     let (dir_x, dir_y) = (p.angle.cos(), p.angle.sin());
     let (plane_x, plane_y) = (-dir_y * PLANE_LEN, dir_x * PLANE_LEN);
 
-    for col in 0..WIDTH {
+    // `sx` indexes both the view column (offset by view_x) and the depth buffer.
+    #[allow(clippy::needless_range_loop)]
+    for sx in 0..view_w {
+        let col = view_x + sx;
         // camera_x sweeps -1 (left edge) .. +1 (right edge).
-        let camera_x = 2.0 * col as f32 / WIDTH as f32 - 1.0;
+        let camera_x = 2.0 * sx as f32 / view_wf - 1.0;
         let ray_x = dir_x + plane_x * camera_x;
         let ray_y = dir_y + plane_y * camera_x;
 
         let hit = cast(world, vswap, p.x, p.y, ray_x, ray_y);
-        zbuf[col] = hit.perp;
+        zbuf[sx] = hit.perp;
 
         let line_h = view_hf / hit.perp;
-        let top = (view_hf - line_h) / 2.0;
-        let y0 = top.max(0.0) as usize;
-        let y1 = ((view_hf + line_h) / 2.0).min(view_hf) as usize;
+        let top = view_yf + (view_hf - line_h) / 2.0;
+        let y0 = top.max(view_yf) as usize;
+        let y1 = (view_yf + (view_hf + line_h) / 2.0).min(view_yf + view_hf) as usize;
 
         let texture = &vswap.walls[hit.texture];
         let column = &texture[hit.tex_u * TEX_SIZE..(hit.tex_u + 1) * TEX_SIZE];
@@ -1107,6 +1186,7 @@ pub fn render(
     // Inverse of the [plane dir] camera matrix, for world -> camera space.
     let inv_det = 1.0 / (plane_x * dir_y - dir_x * plane_y);
 
+    let view_xf = view_x as f32;
     for (_, sx_w, sy_w, sprite) in order {
         let (rel_x, rel_y) = (sx_w - p.x, sy_w - p.y);
         let cam_x = inv_det * (dir_y * rel_x - dir_x * rel_y);
@@ -1115,20 +1195,20 @@ pub fn render(
             continue; // behind or on the camera plane
         }
 
-        let screen_x = WIDTH as f32 / 2.0 * (1.0 + cam_x / depth);
+        let screen_x = view_xf + view_wf / 2.0 * (1.0 + cam_x / depth);
         let size = view_hf / depth; // sprites fill floor-to-ceiling like walls
         let left = screen_x - size / 2.0;
-        let top = (view_hf - size) / 2.0;
+        let top = view_yf + (view_hf - size) / 2.0;
 
-        let x0 = left.max(0.0) as usize;
-        let x1 = (left + size).min(WIDTH as f32).max(0.0) as usize;
-        let y0 = top.max(0.0) as usize;
-        let y1 = (top + size).min(view_hf).max(0.0) as usize;
+        let x0 = left.max(view_xf) as usize;
+        let x1 = (left + size).min(view_xf + view_wf).max(view_xf) as usize;
+        let y0 = top.max(view_yf) as usize;
+        let y1 = (top + size).min(view_yf + view_hf).max(view_yf) as usize;
 
         let texture = &vswap.sprites[sprite];
         let uv_step = TEX_SIZE as f32 / size;
         for x in x0..x1 {
-            if depth >= zbuf[x] {
+            if depth >= zbuf[x - view_x] {
                 continue;
             }
             let u = ((x as f32 - left) * uv_step) as usize & (TEX_SIZE - 1);
