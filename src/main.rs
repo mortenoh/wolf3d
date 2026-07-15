@@ -251,6 +251,12 @@ struct App {
     use_pressed: bool,
     weapon_pressed: Option<u8>,
     mouse_fire: bool,
+    // Edge-triggered menu navigation (consumed once per key-down).
+    menu_up: bool,
+    menu_down: bool,
+    menu_enter: bool,
+    menu_back: bool,
+    any_key: bool,
     last_frame: Instant,
     fps_frames: u32,
     fps_since: Instant,
@@ -268,6 +274,11 @@ impl App {
             use_pressed: false,
             weapon_pressed: None,
             mouse_fire: false,
+            menu_up: false,
+            menu_down: false,
+            menu_enter: false,
+            menu_back: false,
+            any_key: false,
             last_frame: Instant::now(),
             fps_frames: 0,
             fps_since: Instant::now(),
@@ -303,6 +314,11 @@ impl App {
                 || down(KeyCode::ControlLeft)
                 || down(KeyCode::ControlRight)
                 || self.mouse_fire,
+            menu_up: std::mem::take(&mut self.menu_up),
+            menu_down: std::mem::take(&mut self.menu_down),
+            menu_enter: std::mem::take(&mut self.menu_enter),
+            menu_back: std::mem::take(&mut self.menu_back),
+            any_key: std::mem::take(&mut self.any_key),
         };
         self.game.update(dt, &input);
     }
@@ -343,6 +359,8 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     if event.state.is_pressed() && !event.repeat {
+                        // Any key-down advances the title screen.
+                        self.any_key = true;
                         match code {
                             KeyCode::KeyQ => event_loop.exit(),
                             KeyCode::KeyF | KeyCode::F11 => {
@@ -350,16 +368,21 @@ impl ApplicationHandler for App {
                                     set_fullscreen(w, !is_fullscreen(w));
                                 }
                             }
-                            // Esc leaves fullscreen; quits when already windowed.
+                            // Esc leaves fullscreen; otherwise it drives the
+                            // menu (pause from play / back out of a menu).
                             KeyCode::Escape => {
-                                if let Some(w) = &self.window {
-                                    if is_fullscreen(w) {
+                                let fs = self.window.as_ref().is_some_and(|w| is_fullscreen(w));
+                                if fs {
+                                    if let Some(w) = &self.window {
                                         set_fullscreen(w, false);
-                                    } else {
-                                        event_loop.exit();
                                     }
+                                } else {
+                                    self.menu_back = true;
                                 }
                             }
+                            KeyCode::ArrowUp | KeyCode::KeyW => self.menu_up = true,
+                            KeyCode::ArrowDown | KeyCode::KeyS => self.menu_down = true,
+                            KeyCode::Enter | KeyCode::NumpadEnter => self.menu_enter = true,
                             KeyCode::KeyE => self.use_pressed = true,
                             KeyCode::Digit1 => self.weapon_pressed = Some(0),
                             KeyCode::Digit2 => self.weapon_pressed = Some(1),
@@ -389,6 +412,10 @@ impl ApplicationHandler for App {
                 self.last_frame = now;
 
                 self.update(dt);
+                if self.game.should_quit {
+                    event_loop.exit();
+                    return;
+                }
                 self.game.render(&mut self.fb);
                 if let Some(gpu) = &mut self.gpu {
                     gpu.render(&self.fb);
@@ -439,15 +466,27 @@ fn set_fullscreen(w: &Window, on: bool) {
 
 fn main() {
     // WOLF3D_LEVEL=n starts on level n (1-based), handy for debugging.
-    let level_idx = std::env::var("WOLF3D_LEVEL")
-        .ok()
+    let level_env = std::env::var("WOLF3D_LEVEL").ok();
+    let level_idx = level_env
+        .as_ref()
         .and_then(|v| v.parse::<usize>().ok())
         .map_or(0, |n| n.saturating_sub(1));
     let mut game = Game::new(level_idx);
 
+    // Boot to the title/menu unless a level is pinned. A gameplay demo script
+    // (no `key:` commands) keeps booting straight into play as before; the
+    // windowed app and any menu demo (which drives the menu with `key:`) boot
+    // to the title screen.
+    let demo_script = std::env::var("WOLF3D_DEMO").ok();
+    let starts_at_menu =
+        level_env.is_none() && demo_script.as_deref().is_none_or(|s| s.contains("key:"));
+    if starts_at_menu {
+        game.to_title();
+    }
+
     // WOLF3D_DEMO="w:1;use;wait:1;snap:door" plays scripted input headless
     // (no window) and writes framebuffer snapshots; see src/demo.rs.
-    if let Ok(script) = std::env::var("WOLF3D_DEMO") {
+    if let Some(script) = demo_script {
         demo::run(&mut game, &script);
         return;
     }

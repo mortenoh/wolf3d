@@ -12,6 +12,7 @@
 //!   fire                     tap fire for one tic
 //!   firehold:secs            hold fire for the given seconds
 //!   weapon:n                 select weapon n (0 knife .. 3 chaingun)
+//!   key:up|down|enter|esc|any  drive the menu (title/main/episode/difficulty)
 //!   wait:1.0                 let time pass (doors keep animating)
 //!   stats                    print health/ammo/score/lives/keys/weapon
 //!   snap:name                write <out>/name.ppm
@@ -77,6 +78,19 @@ pub fn run(game: &mut Game, script: &str) {
             "weapon" => {
                 let w = arg.parse::<u8>().expect("weapon wants 0..=3");
                 game.update(DT, &Input { select_weapon: Some(w), ..Default::default() });
+            }
+            "key" => {
+                // Drive the menu flow headlessly: key:up|down|enter|esc|any.
+                let mut input = Input::default();
+                match arg {
+                    "up" => input.menu_up = true,
+                    "down" => input.menu_down = true,
+                    "enter" => input.menu_enter = true,
+                    "esc" => input.menu_back = true,
+                    "any" => input.any_key = true,
+                    _ => panic!("key wants up|down|enter|esc|any in {cmd:?}"),
+                }
+                game.update(DT, &input);
             }
             "wait" => step(game, &Input::default(), secs("wait")),
             "snap" => {

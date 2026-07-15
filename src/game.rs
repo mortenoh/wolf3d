@@ -6,6 +6,7 @@ use crate::actors::{Actors, Kind};
 use crate::assets::{self, MapSet, VSwap, VgaGraph};
 use crate::fb::Framebuffer;
 use crate::hud::{self, Hud, HudState, KEY_GOLD, KEY_SILVER, VIEW_H};
+use crate::menu::{self, Menu, MAIN_ITEMS};
 use crate::raycast::{self, Bonus, Player, World};
 
 const MOVE_SPEED: f32 = 3.0; // tiles/sec (Wolf run speed is ~6)
@@ -28,6 +29,50 @@ pub struct Input {
     pub select_weapon: Option<u8>,
     /// Fire button held state (Ctrl / mouse). Edge- and hold-aware inside Game.
     pub fire: bool,
+
+    // --- Menu navigation (all edge-triggered: set true only on key-down) ---
+    pub menu_up: bool,
+    pub menu_down: bool,
+    pub menu_enter: bool,
+    /// Esc / back: leaves the current menu, or opens the menu from play.
+    pub menu_back: bool,
+    /// Any key — advances the title screen to the main menu.
+    pub any_key: bool,
+}
+
+/// Which screen the game is showing. The three menu screens and the title are
+/// driven by the edge-triggered menu inputs; `Playing` runs the simulation.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GameScreen {
+    Title,
+    MainMenu,
+    Episode,
+    Difficulty,
+    Playing,
+}
+
+/// Skill level (WL_DEF.H `gd_*`). Controls enemy spawns (see
+/// [`Actors::spawn_from_level`]); `skill()` is the 0..=3 index it passes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Difficulty {
+    Baby,
+    Easy,
+    Normal,
+    Hard,
+}
+
+impl Difficulty {
+    pub fn skill(self) -> u8 {
+        match self {
+            Difficulty::Baby => 0,
+            Difficulty::Easy => 1,
+            Difficulty::Normal => 2,
+            Difficulty::Hard => 3,
+        }
+    }
+    fn from_index(i: usize) -> Self {
+        [Difficulty::Baby, Difficulty::Easy, Difficulty::Normal, Difficulty::Hard][i.min(3)]
+    }
 }
 
 /// Which weapon the player is holding. Indices match the VSWAP ready-sprite
@@ -70,10 +115,24 @@ pub struct Game {
     pub maps: MapSet,
     pub vga: VgaGraph,
     pub hud: Hud,
+    pub menu: Menu,
     pub world: World,
     pub player: Player,
     pub actors: Actors,
     pub level_idx: usize,
+
+    // --- Front-end / menu state ---
+    pub screen: GameScreen,
+    pub difficulty: Difficulty,
+    /// Current cursor position on each menu screen.
+    pub main_sel: usize,
+    pub episode_sel: usize,
+    pub diff_sel: usize,
+    /// True once a game has been started from the menu (so Esc in the menu can
+    /// resume play rather than fall back to the title).
+    pub started: bool,
+    /// Set when the player picks Quit; the frontend maps it to an exit.
+    pub should_quit: bool,
 
     // Player stats — displayed on the HUD.
     pub health: i32,
@@ -112,19 +171,31 @@ impl Game {
         let vga = VgaGraph::load(&dir)
             .unwrap_or_else(|e| panic!("failed to load VGAGRAPH from {dir:?}: {e}"));
         let hud = Hud::new(&vga);
+        let menu = Menu::new(&vga);
+        // The tests and WOLF3D_LEVEL boot straight into a playable level at the
+        // hardest skill (all difficulty tiers present), so keep that the default.
+        let difficulty = Difficulty::Hard;
         let level_idx = level_idx.min(maps.num_levels() - 1);
         let world = World::new(maps.level(level_idx));
         let player = raycast::find_spawn(&world.level);
-        let actors = Actors::spawn_from_level(&world.level);
+        let actors = Actors::spawn_from_level(&world.level, difficulty.skill());
         Self {
             vswap,
             maps,
             vga,
             hud,
+            menu,
             world,
             player,
             actors,
             level_idx,
+            screen: GameScreen::Playing,
+            difficulty,
+            main_sel: 0,
+            episode_sel: 0,
+            diff_sel: 0,
+            started: true,
+            should_quit: false,
             health: 100,
             ammo: 8,
             score: 0,
@@ -147,7 +218,7 @@ impl Game {
     fn load_level(&mut self) {
         self.world = World::new(self.maps.level(self.level_idx));
         self.player = raycast::find_spawn(&self.world.level);
-        self.actors = Actors::spawn_from_level(&self.world.level);
+        self.actors = Actors::spawn_from_level(&self.world.level, self.difficulty.skill());
         self.attacking = false;
         self.attack_frame = 0;
         self.weapon_frame = 0;
@@ -171,7 +242,133 @@ impl Game {
         self.keys = 0;
     }
 
+    /// Boot into the title screen (used when no `WOLF3D_LEVEL` pins a level).
+    pub fn to_title(&mut self) {
+        self.screen = GameScreen::Title;
+        self.started = false;
+        self.main_sel = 0;
+    }
+
+    /// Frame entry point: dispatch to the menu flow or the simulation.
     pub fn update(&mut self, dt: f32, input: &Input) {
+        match self.screen {
+            GameScreen::Title => self.update_title(input),
+            GameScreen::MainMenu => self.update_main_menu(input),
+            GameScreen::Episode => self.update_episode(input),
+            GameScreen::Difficulty => self.update_difficulty(input),
+            GameScreen::Playing => {
+                if input.menu_back {
+                    // Esc pauses to the main menu (WL_PLAY.C's US_ControlPanel).
+                    self.screen = GameScreen::MainMenu;
+                    return;
+                }
+                self.update_play(dt, input);
+            }
+        }
+        if !matches!(self.screen, GameScreen::Playing) {
+            self.menu.tick(dt);
+        }
+    }
+
+    // --- Menu state machine (WL_MENU.C) ------------------------------------
+
+    fn update_title(&mut self, input: &Input) {
+        if input.any_key || input.menu_enter || input.menu_up || input.menu_down {
+            self.screen = GameScreen::MainMenu;
+            self.main_sel = menu::ITEM_NEW_GAME;
+        }
+    }
+
+    /// Move the cursor to the next selectable item in `dir` (+1 / -1), skipping
+    /// the greyed-out entries (the original leaves them unselectable).
+    fn move_selectable(sel: usize, dir: i32) -> usize {
+        let n = MAIN_ITEMS.len() as i32;
+        let mut i = sel as i32;
+        for _ in 0..n {
+            i = (i + dir).rem_euclid(n);
+            if MAIN_ITEMS[i as usize].active {
+                break;
+            }
+        }
+        i as usize
+    }
+
+    fn update_main_menu(&mut self, input: &Input) {
+        if input.menu_up {
+            self.main_sel = Self::move_selectable(self.main_sel, -1);
+        }
+        if input.menu_down {
+            self.main_sel = Self::move_selectable(self.main_sel, 1);
+        }
+        if input.menu_back {
+            // Back out of the menu: resume a game in progress, else to title.
+            self.screen = if self.started { GameScreen::Playing } else { GameScreen::Title };
+            return;
+        }
+        if input.menu_enter {
+            match self.main_sel {
+                menu::ITEM_NEW_GAME => {
+                    self.episode_sel = 0;
+                    self.screen = GameScreen::Episode;
+                }
+                menu::ITEM_QUIT => self.should_quit = true,
+                _ => {}
+            }
+        }
+    }
+
+    fn update_episode(&mut self, input: &Input) {
+        if input.menu_up {
+            self.episode_sel = (self.episode_sel + menu::NUM_EPISODES - 1) % menu::NUM_EPISODES;
+        }
+        if input.menu_down {
+            self.episode_sel = (self.episode_sel + 1) % menu::NUM_EPISODES;
+        }
+        if input.menu_back {
+            self.screen = GameScreen::MainMenu;
+            return;
+        }
+        if input.menu_enter {
+            self.diff_sel = self.difficulty.skill() as usize;
+            self.screen = GameScreen::Difficulty;
+        }
+    }
+
+    fn update_difficulty(&mut self, input: &Input) {
+        if input.menu_up {
+            self.diff_sel = (self.diff_sel + menu::NUM_DIFFICULTIES - 1) % menu::NUM_DIFFICULTIES;
+        }
+        if input.menu_down {
+            self.diff_sel = (self.diff_sel + 1) % menu::NUM_DIFFICULTIES;
+        }
+        if input.menu_back {
+            self.screen = GameScreen::Episode;
+            return;
+        }
+        if input.menu_enter {
+            self.start_new_game(self.episode_sel, Difficulty::from_index(self.diff_sel));
+        }
+    }
+
+    /// Start a fresh game on `episode`'s first floor at `difficulty` with a full
+    /// starting loadout (WL_PLAY.C NewGame / SetupGameLevel).
+    pub fn start_new_game(&mut self, episode: usize, difficulty: Difficulty) {
+        self.difficulty = difficulty;
+        self.level_idx = (episode * 10).min(self.maps.num_levels() - 1);
+        self.health = 100;
+        self.ammo = 8;
+        self.score = 0;
+        self.lives = 3;
+        self.keys = 0;
+        self.weapon = WEAPON_PISTOL;
+        self.died = false;
+        self.victory = false;
+        self.load_level();
+        self.started = true;
+        self.screen = GameScreen::Playing;
+    }
+
+    fn update_play(&mut self, dt: f32, input: &Input) {
         if let Some(w) = input.select_weapon {
             self.weapon = w as usize;
         }
@@ -457,6 +654,25 @@ impl Game {
     }
 
     pub fn render(&mut self, fb: &mut Framebuffer) {
+        match self.screen {
+            GameScreen::Title => {
+                self.menu.render_title(fb);
+                return;
+            }
+            GameScreen::MainMenu => {
+                self.menu.render_main(fb, self.main_sel);
+                return;
+            }
+            GameScreen::Episode => {
+                self.menu.render_episode(fb, self.episode_sel);
+                return;
+            }
+            GameScreen::Difficulty => {
+                self.menu.render_difficulty(fb, self.diff_sel);
+                return;
+            }
+            GameScreen::Playing => {}
+        }
         raycast::render(fb, &self.vswap, &self.world, &mut self.actors, &self.player, VIEW_H);
         // The firing animation offsets from the weapon's ready frame.
         let weapon_sprite = hud::weapon_ready_sprite(&self.vswap, self.weapon) + self.weapon_frame;

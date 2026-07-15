@@ -669,9 +669,11 @@ fn death_drop(kind: Kind) -> Option<Bonus> {
 }
 
 impl Actors {
-    /// Spawn every enemy in the level's plane 1, at the hardest skill (all
-    /// difficulty variants present). Mirrors WL_GAME.C ScanInfoPlane.
-    pub fn spawn_from_level(level: &Level) -> Self {
+    /// Spawn the level's enemies for the given `skill` (0 baby .. 3 hard),
+    /// mirroring WL_GAME.C ScanInfoPlane: base spawn codes appear on every
+    /// skill, the medium codes only at skill >= medium, the hard codes only at
+    /// skill == hard. Bosses and corpses ignore skill.
+    pub fn spawn_from_level(level: &Level, skill: u8) -> Self {
         let table = build_states();
         let mut list = Vec::new();
         for (i, &code) in level.plane1.iter().enumerate() {
@@ -726,7 +728,10 @@ impl Actors {
                 });
                 continue;
             }
-            if let Some((kind, patrol, dir)) = decode_spawn(code) {
+            if let Some((kind, patrol, dir, tier)) = decode_spawn(code) {
+                if skill < tier_min_skill(tier) {
+                    continue;
+                }
                 let kd = table.kinds[kind.index()];
                 let ambush = level.plane0[i] == 106;
                 let speed = if kind == Kind::Dog { SPD_DOG } else { SPD_PATROL };
@@ -1789,12 +1794,14 @@ fn decode_boss_spawn(code: u16) -> Option<(Kind, u8)> {
     })
 }
 
-/// Decode a plane-1 spawn code into (kind, patrol?, dir 0..3). Covers all three
-/// difficulty tiers (WL_GAME.C ScanInfoPlane), since we spawn as if on hard.
-fn decode_spawn(code: u16) -> Option<(Kind, bool, u8)> {
+/// Decode a plane-1 spawn code into (kind, patrol?, dir 0..3, tier). The tier
+/// is 0 for the base codes (present on every skill), 1 for the medium codes and
+/// 2 for the hard codes; [`tier_min_skill`] maps it to the lowest skill that
+/// spawns it (WL_GAME.C ScanInfoPlane's fall-through `if difficulty < gd_* break`).
+fn decode_spawn(code: u16) -> Option<(Kind, bool, u8, u8)> {
     // Guard/officer/ss/dog use +36 per difficulty tier; mutant uses +18.
     let tiers = [
-        // (kind, patrol, base of each of the 3 tiers)
+        // (kind, patrol, base of each of the 3 tiers: base / medium / hard)
         (Kind::Guard, false, [108u16, 144, 180]),
         (Kind::Guard, true, [112, 148, 184]),
         (Kind::Officer, false, [116, 152, 188]),
@@ -1807,11 +1814,23 @@ fn decode_spawn(code: u16) -> Option<(Kind, bool, u8)> {
         (Kind::Mutant, true, [220, 238, 256]),
     ];
     for &(kind, patrol, bases) in &tiers {
-        for &base in &bases {
+        for (tier, &base) in bases.iter().enumerate() {
             if code >= base && code < base + 4 {
-                return Some((kind, patrol, (code - base) as u8));
+                return Some((kind, patrol, (code - base) as u8, tier as u8));
             }
         }
     }
     None
+}
+
+/// The lowest skill (0 baby .. 3 hard) at which a spawn tier appears. Base
+/// codes spawn everywhere; medium codes need skill >= medium (2); hard codes
+/// need skill >= hard (3). (There is no easy-only tier: baby and easy share the
+/// base set.)
+fn tier_min_skill(tier: u8) -> u8 {
+    match tier {
+        0 => 0,
+        1 => 2,
+        _ => 3,
+    }
 }

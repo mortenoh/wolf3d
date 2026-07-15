@@ -30,10 +30,29 @@ use super::palette::PALETTE;
 // index `N - STARTPICS`.
 // =============================================================================
 
+/// STRUCTPIC (chunk 0) is the pictable; chunks 1 and 2 are the two fonts.
+pub const STARTFONT: usize = 1;
+
 /// First picture chunk (chunks 0..3 are STRUCTPIC and the two fonts).
 pub const STARTPICS: usize = 3;
 
+// --- Menu art (WL_MENU.C / GFXV_WL6.H, v1.4 WL6 numbering) ---
+/// "Options" header art at the top of the main menu.
+pub const C_OPTIONSPIC: usize = 10;
+/// Gun cursor, two animation frames (pointing / firing).
+pub const C_CURSOR1PIC: usize = 11;
+pub const C_CURSOR2PIC: usize = 12;
+/// Difficulty banners, one per skill: "Can I play, Daddy?" (baby), "Don't hurt
+/// me." (easy), "Bring 'em on!" (normal), "I am Death incarnate!" (hard). Each
+/// carries a BJ mugshot whose expression hardens with the skill.
+pub const C_BABYMODEPIC: usize = 19;
+/// Episode name banners, C_EPISODE1PIC..=C_EPISODE1PIC+5.
+pub const C_EPISODE1PIC: usize = 30;
+
 pub const STATUSBARPIC: usize = 86;
+
+/// The game's title screen (shown before the menu).
+pub const TITLEPIC: usize = 87;
 
 // Weapon icons on the status bar (KNIFEPIC + weapon), unused for now but kept
 // for reference alongside the VSWAP weapon-overlay sprites.
@@ -127,6 +146,12 @@ impl VgaGraph {
         let span = self.chunk_span(chunk);
         let expanded = u32::from_le_bytes([span[0], span[1], span[2], span[3]]) as usize;
         huff_expand(&self.dict, &span[4..], expanded)
+    }
+
+    /// Huffman-expand a chunk to its raw bytes. Used by the font loader, whose
+    /// chunks are `fontstruct` records rather than VGA-planar pictures.
+    pub fn raw_chunk(&self, chunk: usize) -> Vec<u8> {
+        self.expand_chunk(chunk)
     }
 
     /// Decode a picture chunk to a row-major RGBA [`Picture`].

@@ -5,6 +5,8 @@ pub mod actors;
 pub mod assets;
 pub mod demo;
 pub mod fb;
+pub mod font;
 pub mod game;
 pub mod hud;
+pub mod menu;
 pub mod raycast;
