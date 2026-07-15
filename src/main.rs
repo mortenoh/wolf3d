@@ -250,6 +250,7 @@ struct App {
     keys: HashSet<KeyCode>,
     use_pressed: bool,
     weapon_pressed: Option<u8>,
+    mouse_fire: bool,
     last_frame: Instant,
     fps_frames: u32,
     fps_since: Instant,
@@ -266,6 +267,7 @@ impl App {
             keys: HashSet::new(),
             use_pressed: false,
             weapon_pressed: None,
+            mouse_fire: false,
             last_frame: Instant::now(),
             fps_frames: 0,
             fps_since: Instant::now(),
@@ -297,6 +299,7 @@ impl App {
             run: down(KeyCode::ShiftLeft),
             use_door: std::mem::take(&mut self.use_pressed),
             select_weapon: self.weapon_pressed.take(),
+            fire: down(KeyCode::ControlLeft) || down(KeyCode::ControlRight) || self.mouse_fire,
         };
         self.game.update(dt, &input);
     }
@@ -324,6 +327,11 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::MouseInput { state, button, .. } => {
+                if button == winit::event::MouseButton::Left {
+                    self.mouse_fire = state.is_pressed();
+                }
+            }
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = &mut self.gpu {
                     gpu.resize(size.width, size.height);

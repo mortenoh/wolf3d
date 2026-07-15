@@ -6,10 +6,25 @@
 //!
 //! Script: semicolon-separated commands.
 //!   w:1.5 / s:… / a:… / d:…  hold that movement key for the given seconds
+//!   W:… / S:… / A:… / D:…    same, at a run (shift held)
 //!   l:90 / r:90              turn left/right by degrees (at turn speed)
 //!   use                      tap the use key (open/close a door)
+//!   fire                     tap fire for one tic
+//!   firehold:secs            hold fire for the given seconds
+//!   weapon:n                 select weapon n (0 knife .. 3 chaingun)
 //!   wait:1.0                 let time pass (doors keep animating)
+//!   stats                    print health/ammo/score/lives/keys/weapon
 //!   snap:name                write <out>/name.ppm
+//! Debug-only commands (for scripting fights that would otherwise need a
+//! pixel-perfect human; not reachable from normal play):
+//!   teleport:x,y,deg         place the player at (x, y) facing deg degrees
+//!   face:deg                 snap the facing to deg degrees (aimfire leaves
+//!                            the aim wherever the last target stood)
+//!   godmode                  the player stops taking damage
+//!   aimfire:secs             hold fire while auto-aiming at the nearest
+//!                            live enemy each tic (scripts cannot track a
+//!                            dodging boss with coarse turn commands)
+//!   victory                  print the victory flag
 //! Output dir comes from WOLF3D_SNAP_DIR (default "snaps").
 
 use std::io::Write;
@@ -32,12 +47,14 @@ pub fn run(game: &mut Game, script: &str) {
                 .unwrap_or_else(|_| panic!("bad {what} argument in {cmd:?}"))
         };
         match op {
-            "w" | "s" | "a" | "d" => {
+            "w" | "s" | "a" | "d" | "W" | "S" | "A" | "D" => {
+                let key = op.to_ascii_lowercase();
                 let input = Input {
-                    forward: op == "w",
-                    back: op == "s",
-                    strafe_left: op == "a",
-                    strafe_right: op == "d",
+                    forward: key == "w",
+                    back: key == "s",
+                    strafe_left: key == "a",
+                    strafe_right: key == "d",
+                    run: op != key, // uppercase = shift held
                     ..Default::default()
                 };
                 step(game, &input, secs("hold"));
@@ -53,12 +70,75 @@ pub fn run(game: &mut Game, script: &str) {
             "use" => {
                 game.update(DT, &Input { use_door: true, ..Default::default() });
             }
+            "fire" => {
+                game.update(DT, &Input { fire: true, ..Default::default() });
+            }
+            "firehold" => step(game, &Input { fire: true, ..Default::default() }, secs("firehold")),
+            "weapon" => {
+                let w = arg.parse::<u8>().expect("weapon wants 0..=3");
+                game.update(DT, &Input { select_weapon: Some(w), ..Default::default() });
+            }
             "wait" => step(game, &Input::default(), secs("wait")),
             "snap" => {
+                // Keep snapshots observation-pure: rendering marks actor
+                // visibility (original FL_VISABLE behavior), which would
+                // otherwise perturb the scripted run.
+                let saved = game.actors.save_visible();
                 game.render(&mut fb);
+                game.actors.restore_visible(&saved);
                 let path = Path::new(&out).join(format!("{arg}.ppm"));
                 write_ppm(&fb, &path);
                 println!("snap: {}", path.display());
+            }
+            "stats" => {
+                println!(
+                    "stats: floor={} health={} ammo={} score={} lives={} keys={:02b} weapon={}",
+                    game.level_idx % 10 + 1,
+                    game.health,
+                    game.ammo,
+                    game.score,
+                    game.lives,
+                    game.keys,
+                    game.weapon,
+                );
+            }
+            // --- Debug-only commands (see module docs) ---
+            "teleport" => {
+                let parts: Vec<f32> = arg
+                    .split(',')
+                    .map(|v| v.trim().parse().unwrap_or_else(|_| panic!("bad teleport argument in {cmd:?}")))
+                    .collect();
+                assert_eq!(parts.len(), 3, "teleport wants x,y,deg in {cmd:?}");
+                game.player.x = parts[0];
+                game.player.y = parts[1];
+                game.player.angle = parts[2].to_radians();
+            }
+            "face" => {
+                game.player.angle = secs("face").to_radians();
+            }
+            "godmode" => {
+                game.god = true;
+                println!("godmode: on");
+            }
+            "aimfire" => {
+                for _ in 0..(secs("aimfire") / DT).round() as u32 {
+                    let (px, py) = (game.player.x, game.player.y);
+                    let target = game
+                        .actors
+                        .list
+                        .iter()
+                        .filter(|a| !a.dead && crate::actors::line_clear(&game.world, px, py, a.x, a.y))
+                        .map(|a| ((a.x - px).powi(2) + (a.y - py).powi(2), a.x, a.y))
+                        .min_by(|a, b| a.0.total_cmp(&b.0));
+                    if let Some((_, bx, by)) = target {
+                        game.player.angle = (by - py).atan2(bx - px);
+                    }
+                    // Hold fire while a target is in sight; idle otherwise.
+                    game.update(DT, &Input { fire: target.is_some(), ..Default::default() });
+                }
+            }
+            "victory" => {
+                println!("victory: {}", game.victory);
             }
             "pos" => {
                 let p = &game.player;

@@ -20,6 +20,7 @@
 use crate::assets::maps::{Level, MAP_SIZE};
 use crate::assets::vswap::{TEX_SIZE, VSwap};
 use crate::fb::{Framebuffer, WIDTH, rgb};
+use crate::hud::{KEY_GOLD, KEY_SILVER};
 
 // =============================================================================
 // TILE SEMANTICS (plane 0)
@@ -28,6 +29,11 @@ use crate::fb::{Framebuffer, WIDTH, rgb};
 const MAX_WALL: u16 = 89;
 const DOOR_FIRST: u16 = 90;
 const DOOR_LAST: u16 = 101;
+
+/// WL_DEF.H ELEVATORTILE: the plane-0 wall tile that is the level-exit switch.
+/// Cmd_Use on it flips the switch (tile 21 -> 22) and completes the floor.
+const ELEVATOR_TILE: u16 = 21;
+const ELEVATOR_TILE_FLIPPED: u16 = 22;
 
 #[inline]
 fn is_wall(t: u16) -> bool {
@@ -71,6 +77,9 @@ pub struct Door {
     pub vertical: bool,
     /// Offset into the 8 door texture chunks: 0 normal, 4 elevator, 6 locked.
     tex_base: usize,
+    /// Required key bitmask to open (0 = unlocked). Matches `gamestate.keys`:
+    /// 1 = gold, 2 = silver (WL_ACT1.C `dr_lock1`/`dr_lock2`).
+    lock: u8,
     /// Open fraction: 0 = closed, 1 = fully slid into the wall.
     pub position: f32,
     state: DoorState,
@@ -128,11 +137,82 @@ const BLOCKING_STATICS: [u16; 21] = [
     24, 25, 26, 28, 30, 31, 33, 34, 35, 36, 39, 40, 41, 45, 58, 59, 60, 62, 63, 68, 69,
 ];
 
+/// A pickup type (`bo_*` in WL_DEF.H `stat_t`), i.e. the `type` field of a
+/// `statinfo` entry that isn't `dressing`/`block`. GetBonus (WL_AGENT.C) maps
+/// each to an effect on the player's stats.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Bonus {
+    Alpo,       // +4 health
+    Food,       // +10 health
+    FirstAid,   // +25 health
+    Gibs,       // +1 health
+    Clip,       // +8 ammo
+    Clip2,      // +4 ammo (enemy drop)
+    MachineGun, // weapon + 6 ammo
+    ChainGun,   // weapon + 6 ammo
+    Key1,       // gold key
+    Key2,       // silver key
+    Cross,      // +100
+    Chalice,    // +500
+    Bible,      // +1000
+    Crown,      // +5000
+    FullHeal,   // 1-up: full health, +25 ammo, +1 life
+}
+
+/// Map a plane-1 static spawn code to its bonus type, if any. The code offsets
+/// index the WL_ACT1.C `statinfo[]` table (index = code - STATIC_FIRST); only
+/// the entries whose `type` is a `bo_*` value are pickups.
+fn bonus_for(code: u16) -> Option<Bonus> {
+    let idx = code.checked_sub(STATIC_FIRST)?;
+    Some(match idx {
+        6 => Bonus::Alpo,
+        20 => Bonus::Key1,
+        21 => Bonus::Key2,
+        24 => Bonus::Food,
+        25 => Bonus::FirstAid,
+        26 => Bonus::Clip,
+        27 => Bonus::MachineGun,
+        28 => Bonus::ChainGun,
+        29 => Bonus::Cross,
+        30 => Bonus::Chalice,
+        31 => Bonus::Bible,
+        32 => Bonus::Crown,
+        33 => Bonus::FullHeal,
+        34 | 38 => Bonus::Gibs,
+        _ => return None,
+    })
+}
+
+/// The `statinfo[]` sprite offset (from SPR_STAT_0) for a bonus, used to draw
+/// enemy drops with the correct sprite (the inverse of `bonus_for`).
+fn bonus_sprite_offset(b: Bonus) -> usize {
+    match b {
+        Bonus::Alpo => 6,
+        Bonus::Key1 => 20,
+        Bonus::Key2 => 21,
+        Bonus::Food => 24,
+        Bonus::FirstAid => 25,
+        Bonus::Clip | Bonus::Clip2 => 26,
+        Bonus::MachineGun => 27,
+        Bonus::ChainGun => 28,
+        Bonus::Cross => 29,
+        Bonus::Chalice => 30,
+        Bonus::Bible => 31,
+        Bonus::Crown => 32,
+        Bonus::FullHeal => 33,
+        Bonus::Gibs => 34,
+    }
+}
+
 pub struct StaticSprite {
     pub x: f32,
     pub y: f32,
     /// Index into `VSwap::sprites`.
     pub sprite: usize,
+    /// The pickup effect, if this static is a bonus item (`FL_BONUS`).
+    pub bonus: Option<Bonus>,
+    /// Once collected: stops rendering and no longer blocks.
+    pub picked: bool,
 }
 
 pub struct World {
@@ -143,6 +223,9 @@ pub struct World {
     door_grid: Vec<u8>,
     /// Tiles blocked by a solid static object.
     blocked: Vec<bool>,
+    /// Tiles occupied by a live actor, republished each tic by the actor
+    /// system; the player collides with these.
+    pub actor_blocked: Vec<bool>,
 }
 
 impl World {
@@ -158,6 +241,8 @@ impl World {
                     x: (i % MAP_SIZE) as f32 + 0.5,
                     y: (i / MAP_SIZE) as f32 + 0.5,
                     sprite: SPR_STAT_0 + (obj - STATIC_FIRST) as usize,
+                    bonus: bonus_for(obj),
+                    picked: false,
                 });
                 blocked[i] = BLOCKING_STATICS.contains(&obj);
             }
@@ -165,21 +250,68 @@ impl World {
         for (i, &t) in level.plane0.iter().enumerate() {
             if is_door(t) {
                 door_grid[i] = (doors.len() + 1) as u8;
+                // Lock/texture from the door tile (WL_ACT1.C SpawnDoor): 92/93
+                // gold, 94/95 silver, 96/97 & 98/99 the unused lock3/lock4.
+                let (tex_base, lock) = match t {
+                    90 | 91 => (0, 0),
+                    92 | 93 => (6, KEY_GOLD),
+                    94 | 95 => (6, KEY_SILVER),
+                    96 | 97 => (6, 4),
+                    98 | 99 => (6, 8),
+                    _ => (4, 0), // 100/101 elevator
+                };
                 doors.push(Door {
                     x: (i % MAP_SIZE) as i32,
                     y: (i / MAP_SIZE) as i32,
                     vertical: t % 2 == 0,
-                    tex_base: match t {
-                        90 | 91 => 0,       // normal
-                        100 | 101 => 4,     // elevator
-                        _ => 6,             // locked (gold/silver)
-                    },
+                    tex_base,
+                    lock,
                     position: 0.0,
                     state: DoorState::Closed,
                 });
             }
         }
-        Self { level, statics, doors, door_grid, blocked }
+        let actor_blocked = vec![false; MAP_SIZE * MAP_SIZE];
+        Self { level, statics, doors, door_grid, blocked, actor_blocked }
+    }
+
+    // --- Queries used by the actor system (see src/actors.rs) ---
+
+    /// Is (x,y) a solid wall (or out of bounds)?
+    pub fn wall_at(&self, x: i32, y: i32) -> bool {
+        is_wall(tile(&self.level, x, y))
+    }
+
+    /// Door index at (x,y), if any.
+    pub fn door_lookup(&self, x: i32, y: i32) -> Option<usize> {
+        if x < 0 || y < 0 || x >= MAP_SIZE as i32 || y >= MAP_SIZE as i32 {
+            return None;
+        }
+        let idx = self.door_grid[y as usize * MAP_SIZE + x as usize];
+        (idx != 0).then(|| idx as usize - 1)
+    }
+
+    /// A door's open fraction (0 closed .. 1 open).
+    pub fn door_position(&self, idx: usize) -> f32 {
+        self.doors[idx].position
+    }
+
+    /// Is a door open enough to walk through?
+    pub fn door_open_enough(&self, idx: usize) -> bool {
+        self.doors[idx].position >= DOOR_PASSABLE
+    }
+
+    /// Start opening a door (idempotent) — enemies call this to pass through.
+    pub fn request_open_door(&mut self, idx: usize) {
+        let d = &mut self.doors[idx];
+        if d.state == DoorState::Closed || d.state == DoorState::Closing {
+            d.state = DoorState::Opening;
+        }
+    }
+
+    /// Raw plane-1 code at tile index (for patrol turn markers).
+    pub fn plane1_at(&self, tile_idx: usize) -> u16 {
+        self.level.plane1[tile_idx]
     }
 
     fn door_at(&self, x: i32, y: i32) -> Option<&Door> {
@@ -198,8 +330,10 @@ impl World {
         }
     }
 
-    /// The use key: open/close the door in the tile the player faces.
-    pub fn use_door(&mut self, p: &Player) {
+    /// The use key: open/close the door in the tile the player faces. A locked
+    /// door (WL_ACT1.C OperateDoor) does nothing unless `keys` holds its key —
+    /// the original plays a "no way" sound; we have no text/audio, so refuse.
+    pub fn use_door(&mut self, p: &Player, keys: u8) {
         let tx = (p.x + p.angle.cos()).floor() as i32;
         let ty = (p.y + p.angle.sin()).floor() as i32;
         let on_it = tx == p.x.floor() as i32 && ty == p.y.floor() as i32;
@@ -208,12 +342,51 @@ impl World {
             .map(|d| self.door_grid[d.y as usize * MAP_SIZE + d.x as usize])
         {
             let d = &mut self.doors[idx as usize - 1];
+            if d.lock != 0 && keys & d.lock == 0 {
+                return; // locked and we lack the key
+            }
             d.state = match d.state {
                 DoorState::Closed | DoorState::Closing => DoorState::Opening,
                 _ if on_it => DoorState::Opening,
                 _ => DoorState::Closing,
             };
         }
+    }
+
+    /// Cmd_Use against the tile the player faces: if it is the elevator switch
+    /// (ELEVATORTILE), flip it (21 -> 22) and report the floor complete. The
+    /// caller advances the level (WL_AGENT.C Cmd_Use / `ex_completed`).
+    pub fn use_elevator(&mut self, p: &Player) -> bool {
+        let tx = (p.x + p.angle.cos()).floor() as i32;
+        let ty = (p.y + p.angle.sin()).floor() as i32;
+        if tx < 0 || ty < 0 || tx >= MAP_SIZE as i32 || ty >= MAP_SIZE as i32 {
+            return false;
+        }
+        let idx = ty as usize * MAP_SIZE + tx as usize;
+        if self.level.plane0[idx] == ELEVATOR_TILE {
+            self.level.plane0[idx] = ELEVATOR_TILE_FLIPPED;
+            return true;
+        }
+        false
+    }
+
+    /// Collect a bonus static: stop it rendering and clear any block it held.
+    pub fn take_static(&mut self, i: usize) {
+        let s = &mut self.statics[i];
+        s.picked = true;
+        let idx = s.y.floor() as usize * MAP_SIZE + s.x.floor() as usize;
+        self.blocked[idx] = false;
+    }
+
+    /// Spawn an enemy-death drop (WL_ACT1.C PlaceItemType) as a bonus static.
+    pub fn place_drop(&mut self, tilex: i32, tiley: i32, bonus: Bonus) {
+        self.statics.push(StaticSprite {
+            x: tilex as f32 + 0.5,
+            y: tiley as f32 + 0.5,
+            sprite: SPR_STAT_0 + bonus_sprite_offset(bonus),
+            bonus: Some(bonus),
+            picked: false,
+        });
     }
 
     /// Solid for movement: walls, closed-enough doors, blocking statics.
@@ -291,6 +464,14 @@ fn occupied(world: &World, x: f32, y: f32) -> bool {
     for cy in y0..=y1 {
         for cx in x0..=x1 {
             if world.blocks_move(cx, cy) {
+                return true;
+            }
+            if cx >= 0
+                && cy >= 0
+                && (cx as usize) < MAP_SIZE
+                && (cy as usize) < MAP_SIZE
+                && world.actor_blocked[cy as usize * MAP_SIZE + cx as usize]
+            {
                 return true;
             }
         }
@@ -407,7 +588,14 @@ fn cast(world: &World, vswap: &VSwap, px: f32, py: f32, ray_x: f32, ray_y: f32) 
 /// Render the 3D view into the top `view_h` rows of the framebuffer, leaving
 /// the rows below untouched for the HUD. Wall/sprite projection scales to
 /// `view_h`, so shrinking the view letterboxes rather than crops.
-pub fn render(fb: &mut Framebuffer, vswap: &VSwap, world: &World, p: &Player, view_h: usize) {
+pub fn render(
+    fb: &mut Framebuffer,
+    vswap: &VSwap,
+    world: &World,
+    actors: &mut crate::actors::Actors,
+    p: &Player,
+    view_h: usize,
+) {
     let view_hf = view_h as f32;
 
     // Ceiling / floor halves of the 3D view.
@@ -447,18 +635,30 @@ pub fn render(fb: &mut Framebuffer, vswap: &VSwap, world: &World, p: &Player, vi
     }
 
     // --- Sprite pass: back to front, columns depth-tested against zbuf ---
-    let mut order: Vec<(f32, &StaticSprite)> = world
+    // Statics and actors share the pass; each contributes (dist2, x, y, sprite).
+    actors.clear_visible();
+    let mut order: Vec<(f32, f32, f32, usize)> = world
         .statics
         .iter()
-        .map(|s| ((s.x - p.x).powi(2) + (s.y - p.y).powi(2), s))
+        .filter(|s| !s.picked)
+        .map(|s| ((s.x - p.x).powi(2) + (s.y - p.y).powi(2), s.x, s.y, s.sprite))
         .collect();
+    for i in 0..actors.list.len() {
+        let (ax, ay) = (actors.list[i].x, actors.list[i].y);
+        let sprite = actors.sprite_of(i, p.x, p.y);
+        order.push(((ax - p.x).powi(2) + (ay - p.y).powi(2), ax, ay, sprite));
+    }
+    for pr in &actors.projectiles {
+        let sprite = pr.sprite(p.x, p.y);
+        order.push(((pr.x - p.x).powi(2) + (pr.y - p.y).powi(2), pr.x, pr.y, sprite));
+    }
     order.sort_by(|a, b| b.0.total_cmp(&a.0));
 
     // Inverse of the [plane dir] camera matrix, for world -> camera space.
     let inv_det = 1.0 / (plane_x * dir_y - dir_x * plane_y);
 
-    for (_, s) in order {
-        let (rel_x, rel_y) = (s.x - p.x, s.y - p.y);
+    for (_, sx_w, sy_w, sprite) in order {
+        let (rel_x, rel_y) = (sx_w - p.x, sy_w - p.y);
         let cam_x = inv_det * (dir_y * rel_x - dir_x * rel_y);
         let depth = inv_det * (-plane_y * rel_x + plane_x * rel_y);
         if depth <= 0.05 {
@@ -475,7 +675,7 @@ pub fn render(fb: &mut Framebuffer, vswap: &VSwap, world: &World, p: &Player, vi
         let y0 = top.max(0.0) as usize;
         let y1 = (top + size).min(view_hf).max(0.0) as usize;
 
-        let texture = &vswap.sprites[s.sprite];
+        let texture = &vswap.sprites[sprite];
         let uv_step = TEX_SIZE as f32 / size;
         for x in x0..x1 {
             if depth >= zbuf[x] {
