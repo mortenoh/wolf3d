@@ -19,7 +19,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use fb::{Framebuffer, HEIGHT, WIDTH};
-use game::{Game, GameScreen, Input};
+use game::{Game, GameScreen, Input, SfxMode};
 
 // =============================================================================
 // GPU BLITTER
@@ -259,10 +259,17 @@ struct App {
     sound: Option<Backend>,
     /// The music track currently requested, so we only re-issue on change.
     current_music: Option<usize>,
+    /// Sound-menu state last pushed to the backend (re-issue only on change).
+    applied_sfx_mode: SfxMode,
+    applied_music_on: bool,
     keys: HashSet<KeyCode>,
     use_pressed: bool,
     weapon_pressed: Option<u8>,
     mouse_fire: bool,
+    /// A character typed this frame (for the save-name field).
+    typed: Option<char>,
+    /// Backspace pressed this frame.
+    backspace: bool,
     /// Accumulated raw mouse x-delta since the last tic (counts, unscaled).
     mouse_dx: f32,
     /// Whether the cursor is currently grabbed for mouse-look.
@@ -281,6 +288,7 @@ struct App {
 
 impl App {
     fn new(game: Game, sound: Option<Backend>) -> Self {
+        let (sfx_mode, music_on) = (game.sfx_mode, game.music_on);
         Self {
             window: None,
             gpu: None,
@@ -288,10 +296,14 @@ impl App {
             game,
             sound,
             current_music: None,
+            applied_sfx_mode: sfx_mode,
+            applied_music_on: music_on,
             keys: HashSet::new(),
             use_pressed: false,
             weapon_pressed: None,
             mouse_fire: false,
+            typed: None,
+            backspace: false,
             mouse_dx: 0.0,
             cursor_grabbed: false,
             menu_up: false,
@@ -367,21 +379,40 @@ impl App {
             menu_enter: std::mem::take(&mut self.menu_enter),
             menu_back: std::mem::take(&mut self.menu_back),
             any_key: std::mem::take(&mut self.any_key),
+            typed: std::mem::take(&mut self.typed),
+            backspace: std::mem::take(&mut self.backspace),
         };
         self.game.update(dt, &input);
         self.sync_audio();
     }
 
-    /// Feed the tic's emitted sound events to the backend and keep the music in
-    /// step with the current screen/level.
+    /// Feed the tic's emitted sound events to the backend and keep the music and
+    /// the Sound-menu options (effects mode, music on/off) in step with the game.
     fn sync_audio(&mut self) {
         let sounds = self.game.take_sounds();
         let screen = self.game.screen;
         let level = self.game.level_idx;
+        let sfx_mode = self.game.sfx_mode;
+        let music_on = self.game.music_on;
         let Some(backend) = &mut self.sound else { return };
-        for id in sounds {
-            backend.play(id);
+
+        // Apply Sound-menu changes to the backend only when they flip.
+        if sfx_mode != self.applied_sfx_mode {
+            self.applied_sfx_mode = sfx_mode;
+            backend.set_digi_enabled(sfx_mode == SfxMode::DigiAdlib);
         }
+        if music_on != self.applied_music_on {
+            self.applied_music_on = music_on;
+            backend.set_music_enabled(music_on);
+        }
+
+        // Effects are gated by the Sound menu's effects mode.
+        if sfx_mode != SfxMode::Off {
+            for id in sounds {
+                backend.play(id);
+            }
+        }
+
         // Title is silent; the menus share the menu song; play the level song
         // while playing.
         let desired = match screen {
@@ -444,7 +475,23 @@ impl ApplicationHandler for App {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    if event.state.is_pressed() && !event.repeat {
+                    if event.state.is_pressed() && !event.repeat && self.game.is_text_entry() {
+                        // Typing a save name: route printable text and editing
+                        // keys to the field; suppress gameplay/global shortcuts
+                        // so keys like Q/M don't quit or toggle music mid-name.
+                        match code {
+                            KeyCode::Escape => self.menu_back = true,
+                            KeyCode::Enter | KeyCode::NumpadEnter => self.menu_enter = true,
+                            KeyCode::Backspace => self.backspace = true,
+                            _ => {
+                                if let Some(text) = &event.text
+                                    && let Some(c) = text.chars().next().filter(|c| !c.is_control())
+                                {
+                                    self.typed = Some(c);
+                                }
+                            }
+                        }
+                    } else if event.state.is_pressed() && !event.repeat {
                         // Any key-down advances the title screen.
                         self.any_key = true;
                         match code {
@@ -470,10 +517,10 @@ impl ApplicationHandler for App {
                             KeyCode::ArrowDown | KeyCode::KeyS => self.menu_down = true,
                             KeyCode::Enter | KeyCode::NumpadEnter => self.menu_enter = true,
                             KeyCode::KeyM => {
-                                if let Some(b) = &mut self.sound {
-                                    let on = b.toggle_music();
-                                    println!("music: {}", if on { "on" } else { "off" });
-                                }
+                                // Toggle music through the game state so the
+                                // Sound menu and the shortcut stay in sync.
+                                self.game.music_on = !self.game.music_on;
+                                println!("music: {}", if self.game.music_on { "on" } else { "off" });
                             }
                             KeyCode::KeyE => self.use_pressed = true,
                             KeyCode::Digit1 => self.weapon_pressed = Some(0),

@@ -38,6 +38,7 @@
 
 use crate::assets::maps::{Level, MAP_SIZE};
 use crate::raycast::{Bonus, World};
+use crate::savegame::{Reader, SaveError, Writer};
 use crate::sound as snd;
 
 // =============================================================================
@@ -238,6 +239,25 @@ impl Kind {
             Kind::Gift => 11,
             Kind::Fat => 12,
         }
+    }
+    /// Inverse of [`Kind::index`], for save-game decoding.
+    fn from_index(i: u8) -> Result<Self, SaveError> {
+        Ok(match i {
+            0 => Kind::Guard,
+            1 => Kind::Officer,
+            2 => Kind::Ss,
+            3 => Kind::Dog,
+            4 => Kind::Mutant,
+            5 => Kind::Hans,
+            6 => Kind::Schabbs,
+            7 => Kind::FakeHitler,
+            8 => Kind::MechaHitler,
+            9 => Kind::Hitler,
+            10 => Kind::Gretel,
+            11 => Kind::Gift,
+            12 => Kind::Fat,
+            _ => return Err(SaveError::BadEnum("actor kind")),
+        })
     }
     /// starthitpoints[gd_hard][kind] from WL_ACT2.C ("death incarnate" tier);
     /// the real Hitler uses A_HitlerMorph's own table {500,700,800,900}.
@@ -584,6 +604,11 @@ impl Actor {
     fn tile(&self) -> usize {
         self.tiley as usize * MAP_SIZE + self.tilex as usize
     }
+
+    /// Current hitpoints (0 once dead). Exposed for save-game determinism tests.
+    pub fn health(&self) -> i32 {
+        self.health
+    }
 }
 
 // =============================================================================
@@ -634,6 +659,24 @@ enum ProjKind {
     Fire,
     /// Gift/Fat rocket: damage (rnd>>3)+30, speed 0x2000/tic.
     Rocket,
+}
+
+impl ProjKind {
+    fn tag(self) -> u8 {
+        match self {
+            ProjKind::Needle => 0,
+            ProjKind::Fire => 1,
+            ProjKind::Rocket => 2,
+        }
+    }
+    fn from_tag(t: u8) -> Result<Self, SaveError> {
+        Ok(match t {
+            0 => ProjKind::Needle,
+            1 => ProjKind::Fire,
+            2 => ProjKind::Rocket,
+            _ => return Err(SaveError::BadEnum("projectile kind")),
+        })
+    }
 }
 
 pub struct Projectile {
@@ -835,6 +878,110 @@ impl Actors {
     /// Drain the kinds killed since the last call.
     pub fn take_deaths(&mut self) -> Vec<Kind> {
         std::mem::take(&mut self.deaths)
+    }
+
+    // --- Save/load (see src/savegame.rs) -----------------------------------
+
+    /// Serialize both RNG stream positions and the full actor + projectile
+    /// lists. The static state table and scratch grids are not written — they
+    /// are rebuilt by [`Actors::spawn_from_level`] before [`Actors::load`].
+    pub fn save(&self, w: &mut Writer) {
+        w.put_u32(self.rnd.index as u32);
+        w.put_u32(self.snd_rnd.index as u32);
+        w.put_u32(self.list.len() as u32);
+        for a in &self.list {
+            w.put_u8(a.kind.index() as u8);
+            w.put_f32(a.x);
+            w.put_f32(a.y);
+            w.put_i32(a.tilex);
+            w.put_i32(a.tiley);
+            w.put_u8(a.dir);
+            w.put_u32(a.state as u32);
+            w.put_f32(a.ticcount);
+            w.put_i32(a.health);
+            w.put_f32(a.speed);
+            w.put_f32(a.distance);
+            w.put_i32(a.waiting_door.map_or(-1, |d| d as i32));
+            w.put_u8(a.flags);
+            w.put_f32(a.reaction);
+            w.put_bool(a.dead);
+            w.put_bool(a.visible);
+        }
+        w.put_u32(self.projectiles.len() as u32);
+        for p in &self.projectiles {
+            w.put_f32(p.x);
+            w.put_f32(p.y);
+            w.put_f32(p.vx);
+            w.put_f32(p.vy);
+            w.put_u8(p.kind.tag());
+            w.put_f32(p.anim);
+            w.put_bool(p.dead);
+        }
+    }
+
+    /// Replace the actor and projectile lists (and both RNG indices) from a
+    /// save. Call on an `Actors` freshly built for the same level, so the state
+    /// table the restored `state` indices reference is already present.
+    pub fn load(&mut self, r: &mut Reader) -> Result<(), SaveError> {
+        self.rnd.index = r.get_u32()? as usize & 0xff;
+        self.snd_rnd.index = r.get_u32()? as usize & 0xff;
+        let nactors = r.get_u32()? as usize;
+        self.list.clear();
+        self.list.reserve(nactors);
+        for _ in 0..nactors {
+            let kind = Kind::from_index(r.get_u8()?)?;
+            let x = r.get_f32()?;
+            let y = r.get_f32()?;
+            let tilex = r.get_i32()?;
+            let tiley = r.get_i32()?;
+            let dir = r.get_u8()?;
+            let state = r.get_u32()? as usize;
+            let ticcount = r.get_f32()?;
+            let health = r.get_i32()?;
+            let speed = r.get_f32()?;
+            let distance = r.get_f32()?;
+            let wd = r.get_i32()?;
+            let waiting_door = (wd >= 0).then_some(wd as usize);
+            let flags = r.get_u8()?;
+            let reaction = r.get_f32()?;
+            let dead = r.get_bool()?;
+            let visible = r.get_bool()?;
+            if state >= self.table.states.len() {
+                return Err(SaveError::BadEnum("actor state"));
+            }
+            self.list.push(Actor {
+                kind,
+                x,
+                y,
+                tilex,
+                tiley,
+                dir,
+                state,
+                ticcount,
+                health,
+                speed,
+                distance,
+                waiting_door,
+                flags,
+                reaction,
+                dead,
+                visible,
+            });
+        }
+        let nproj = r.get_u32()? as usize;
+        self.projectiles.clear();
+        self.projectiles.reserve(nproj);
+        for _ in 0..nproj {
+            let x = r.get_f32()?;
+            let y = r.get_f32()?;
+            let vx = r.get_f32()?;
+            let vy = r.get_f32()?;
+            let kind = ProjKind::from_tag(r.get_u8()?)?;
+            let anim = r.get_f32()?;
+            let dead = r.get_bool()?;
+            self.projectiles.push(Projectile { x, y, vx, vy, kind, anim, dead });
+        }
+        Ok(())
     }
 
     /// Advance all actors one step. `tics` is elapsed time in tic units.

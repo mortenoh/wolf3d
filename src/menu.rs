@@ -10,11 +10,14 @@
 //! dark-red `DEACTIVE`.
 
 use crate::assets::vgagraph::{
-    Picture, C_BABYMODEPIC, C_CURSOR1PIC, C_CURSOR2PIC, C_EPISODE1PIC, C_OPTIONSPIC, TITLEPIC,
+    Picture, C_BABYMODEPIC, C_CURSOR1PIC, C_CURSOR2PIC, C_EPISODE1PIC, C_FXTITLEPIC, C_LOADGAMEPIC,
+    C_MUSICTITLEPIC, C_NOTSELECTEDPIC, C_OPTIONSPIC, C_SAVEGAMEPIC, C_SELECTEDPIC, TITLEPIC,
 };
 use crate::assets::VgaGraph;
 use crate::fb::{Framebuffer, HEIGHT, WIDTH};
 use crate::font::Font;
+use crate::game::SfxMode;
+use crate::savegame::NUM_SLOTS;
 
 // --- Palette color bytes (WL_MENU.H, non-SPEAR build) ---
 const BORDCOLOR: u8 = 0x29;
@@ -38,6 +41,18 @@ const ITEM_STEP: i32 = 13;
 const NE_X: i32 = 10;
 const NE_Y: i32 = 23;
 
+// --- Sound-menu layout (SM_* from WL_MENU.H) ---
+const SM_X: i32 = 48;
+const SM_W: i32 = 250;
+const SM_Y1: i32 = 20; // effects group top
+const SM_Y2: i32 = SM_Y1 + 5 * ITEM_STEP; // music group top (85)
+
+// --- Load/Save layout (LSM_* from WL_MENU.H) ---
+const LSM_X: i32 = 85;
+const LSM_Y: i32 = 55;
+const LSM_W: i32 = 175;
+const LSM_H: i32 = 10 * ITEM_STEP + 10;
+
 /// The ten main-menu entries in original order. Only New Game and Quit are
 /// wired up in this milestone; the rest render greyed-out (`active == false`),
 /// exactly as the original draws not-yet-implemented options.
@@ -47,18 +62,23 @@ pub struct MenuItem {
 }
 pub const MAIN_ITEMS: [MenuItem; 10] = [
     MenuItem { label: "New Game", active: true },
-    MenuItem { label: "Sound", active: false },
+    MenuItem { label: "Sound", active: true },
     MenuItem { label: "Control", active: false },
-    MenuItem { label: "Load Game", active: false },
-    MenuItem { label: "Save Game", active: false },
+    MenuItem { label: "Load Game", active: true },
+    // Save Game is only reachable from the pause menu during play; the game
+    // state machine greys it via `Game::main_item_active` when not started.
+    MenuItem { label: "Save Game", active: true },
     MenuItem { label: "Change View", active: false },
     MenuItem { label: "Read This!", active: false },
     MenuItem { label: "View Scores", active: false },
     MenuItem { label: "Back to Demo", active: false },
     MenuItem { label: "Quit", active: true },
 ];
-/// Index of New Game and Quit for the game state machine.
+/// Indices of the wired main-menu entries for the game state machine.
 pub const ITEM_NEW_GAME: usize = 0;
+pub const ITEM_SOUND: usize = 1;
+pub const ITEM_LOAD: usize = 3;
+pub const ITEM_SAVE: usize = 4;
 pub const ITEM_QUIT: usize = 9;
 
 pub const NUM_EPISODES: usize = 6;
@@ -91,6 +111,12 @@ pub struct Menu {
     cursor: [Picture; 2],
     episodes: Vec<Picture>,
     difficulty: Vec<Picture>,
+    /// Radio-button art: [not-selected, selected] (Sound menu).
+    radio: [Picture; 2],
+    /// Sound-menu section titles: [effects, music].
+    sound_titles: [Picture; 2],
+    /// Load / Save header art: [load, save].
+    ls_titles: [Picture; 2],
     /// Cursor animation clock, in seconds.
     blink: f32,
 }
@@ -104,6 +130,9 @@ impl Menu {
             cursor: [vga.pic(C_CURSOR1PIC), vga.pic(C_CURSOR2PIC)],
             episodes: (0..NUM_EPISODES).map(|e| vga.pic(C_EPISODE1PIC + e)).collect(),
             difficulty: (0..NUM_DIFFICULTIES).map(|d| vga.pic(C_BABYMODEPIC + d)).collect(),
+            radio: [vga.pic(C_NOTSELECTEDPIC), vga.pic(C_SELECTEDPIC)],
+            sound_titles: [vga.pic(C_FXTITLEPIC), vga.pic(C_MUSICTITLEPIC)],
+            ls_titles: [vga.pic(C_LOADGAMEPIC), vga.pic(C_SAVEGAMEPIC)],
             blink: 0.0,
         }
     }
@@ -128,14 +157,16 @@ impl Menu {
 
     /// The main menu: red backdrop, Options header, the item window and the
     /// grey/greyed item list with the gun cursor on `selected`.
-    pub fn render_main(&self, fb: &mut Framebuffer, selected: usize) {
+    pub fn render_main(&self, fb: &mut Framebuffer, selected: usize, started: bool) {
         clear(fb, BORDCOLOR);
         draw_stripes(fb, 10);
         blit(fb, &self.options, 84, 0);
         draw_window(fb, MENU_X - 8, MENU_Y - 3, MENU_W, MENU_H, BKGDCOLOR);
 
         for (i, item) in MAIN_ITEMS.iter().enumerate() {
-            let color = if !item.active {
+            // Save Game greys out until a game is in progress.
+            let active = item.active && (i != ITEM_SAVE || started);
+            let color = if !active {
                 DEACTIVE
             } else if i == selected {
                 HIGHLIGHT
@@ -189,6 +220,121 @@ impl Menu {
         self.font
             .draw_centered(fb, phrase_y + self.font.height() as i32 + 8, "Up / Down to choose, Enter to start", TEXTCOLOR);
     }
+
+    /// The Sound options screen (WL_MENU.C CP_Sound), collapsed to two radio
+    /// groups: sound effects (Digitized+AdLib / AdLib only / None) and music
+    /// (AdLib / None). The filled bullet marks the active option in each group.
+    pub fn render_sound(&self, fb: &mut Framebuffer, sfx: SfxMode, music_on: bool, selected: usize) {
+        clear(fb, BORDCOLOR);
+        draw_stripes(fb, 10);
+
+        // Effects group: 3 rows.
+        let sfx_labels = ["Digitized + AdLib", "AdLib only", "None"];
+        let sfx_active = sfx as usize; // matches SfxMode ordering
+        draw_window(fb, SM_X - 8, SM_Y1 - 3, SM_W, 3 * ITEM_STEP + 2, BKGDCOLOR);
+        blit(fb, &self.sound_titles[0], 100, SM_Y1 - 18);
+        for (i, label) in sfx_labels.iter().enumerate() {
+            let row = i;
+            let y = SM_Y1 + i as i32 * ITEM_STEP + 2;
+            self.draw_radio_item(fb, y, label, sfx_active == i, selected == row);
+        }
+
+        // Music group: 2 rows.
+        let music_labels = ["AdLib", "None"];
+        let music_active = if music_on { 0 } else { 1 };
+        draw_window(fb, SM_X - 8, SM_Y2 - 3, SM_W, 2 * ITEM_STEP + 2, BKGDCOLOR);
+        blit(fb, &self.sound_titles[1], 100, SM_Y2 - 18);
+        for (j, label) in music_labels.iter().enumerate() {
+            let row = 3 + j;
+            let y = SM_Y2 + j as i32 * ITEM_STEP + 2;
+            self.draw_radio_item(fb, y, label, music_active == j, selected == row);
+        }
+
+        // Gun cursor on the selected row.
+        let cy = if selected < 3 {
+            SM_Y1 + selected as i32 * ITEM_STEP
+        } else {
+            SM_Y2 + (selected - 3) as i32 * ITEM_STEP
+        };
+        blit(fb, self.cursor_frame(), SM_X & !7, cy);
+    }
+
+    /// One radio row: the (un)filled bullet, then the label, highlighted when
+    /// the cursor rests on it.
+    fn draw_radio_item(&self, fb: &mut Framebuffer, y: i32, label: &str, on: bool, cursor: bool) {
+        let pic = &self.radio[on as usize];
+        let rx = SM_X + MENU_INDENT;
+        blit(fb, pic, rx, y);
+        let color = if cursor { HIGHLIGHT } else { TEXTCOLOR };
+        self.font.draw(fb, rx + pic.width as i32 + 8, y, label, color);
+    }
+
+    /// The Load Game slot list (WL_MENU.C CP_LoadGame): filled slots show their
+    /// name, empty slots grey out as "- EMPTY -" and cannot be chosen.
+    pub fn render_load(&self, fb: &mut Framebuffer, slots: &[Option<String>], selected: usize) {
+        self.render_slot_list(fb, &self.ls_titles[0], slots, selected, false, "");
+    }
+
+    /// The Save Game slot list (WL_MENU.C CP_SaveGame). While `entering` a name,
+    /// the selected slot shows the live text buffer with a caret.
+    pub fn render_save(
+        &self,
+        fb: &mut Framebuffer,
+        slots: &[Option<String>],
+        selected: usize,
+        entering: bool,
+        name: &str,
+    ) {
+        self.render_slot_list(fb, &self.ls_titles[1], slots, selected, entering, name);
+    }
+
+    /// Shared slot-list body for Load and Save. `empty_disabled` (Load only)
+    /// greys empty slots; `entering`/`name` (Save only) draw the text field.
+    #[allow(clippy::too_many_arguments)]
+    fn render_slot_list(
+        &self,
+        fb: &mut Framebuffer,
+        header: &Picture,
+        slots: &[Option<String>],
+        selected: usize,
+        entering: bool,
+        name: &str,
+    ) {
+        clear(fb, BORDCOLOR);
+        draw_stripes(fb, 10);
+        blit(fb, header, 84, 0);
+        draw_window(fb, LSM_X - 8, LSM_Y - 3, LSM_W, LSM_H, BKGDCOLOR);
+
+        let box_x = LSM_X + 16;
+        let box_w = LSM_W - 16 - 15;
+        for i in 0..NUM_SLOTS {
+            let y = LSM_Y + i as i32 * ITEM_STEP;
+            draw_outline(fb, box_x, y, box_w, 11);
+            let filled = slots.get(i).and_then(Option::as_ref).is_some();
+            let editing = entering && i == selected;
+            let text = if editing {
+                format!("{name}_")
+            } else if let Some(Some(n)) = slots.get(i) {
+                n.clone()
+            } else {
+                "- EMPTY -".to_string()
+            };
+            let color = if editing || i == selected {
+                HIGHLIGHT
+            } else if filled {
+                TEXTCOLOR
+            } else {
+                DEACTIVE
+            };
+            self.font.draw(fb, box_x + 3, y + 2, &text, color);
+        }
+
+        // The gun cursor sits in the window's left margin (hidden while typing).
+        if !entering {
+            let cy = LSM_Y - 2 + selected as i32 * ITEM_STEP;
+            blit(fb, self.cursor_frame(), LSM_X & !7, cy);
+        }
+    }
 }
 
 // --- Primitives (VWB_Bar / VWB_Hlin / VWB_Vlin / VWB_DrawPic) -------------
@@ -210,6 +356,15 @@ fn draw_stripes(fb: &mut Framebuffer, y: i32) {
 /// darker DEACTIVE, bottom/right in the brighter BORD2COLOR).
 fn draw_window(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32, color: u8) {
     bar(fb, x, y, w, h, color);
+    hlin(fb, x, x + w, y, DEACTIVE);
+    vlin(fb, y, y + h, x, DEACTIVE);
+    hlin(fb, x, x + w, y + h, BORD2COLOR);
+    vlin(fb, y, y + h, x + w, BORD2COLOR);
+}
+
+/// A bevelled empty box outline (DrawOutline) for the save-slot cells: top/left
+/// in the darker DEACTIVE, bottom/right in the brighter BORD2COLOR.
+fn draw_outline(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32) {
     hlin(fb, x, x + w, y, DEACTIVE);
     vlin(fb, y, y + h, x, DEACTIVE);
     hlin(fb, x, x + w, y + h, BORD2COLOR);

@@ -286,6 +286,9 @@ pub struct Engine {
     digi: Option<usize>,
     digi_pos: f64,
     digi_priority: i32,
+    /// When false, sounds that have a digitized version fall back to AdLib (the
+    /// Sound menu's "AdLib only" effects mode).
+    digi_enabled: bool,
 }
 
 impl Engine {
@@ -312,6 +315,7 @@ impl Engine {
             digi: None,
             digi_pos: 0.0,
             digi_priority: 0,
+            digi_enabled: true,
         }
     }
 
@@ -343,6 +347,13 @@ impl Engine {
         self.music_enabled
     }
 
+    /// Enable/disable digitized playback. When disabled, sounds that have a
+    /// digitized version play their AdLib rendition instead (the Sound menu's
+    /// "AdLib only" effects mode).
+    pub fn set_digi_enabled(&mut self, on: bool) {
+        self.digi_enabled = on;
+    }
+
     /// `SD_PlaySound`: play a sound effect, honoring the priority of whatever is
     /// already sounding. Digitized playback is preferred when the sound has a
     /// digitized version.
@@ -354,7 +365,11 @@ impl Engine {
         let priority = self.assets.sfx[s].as_ref().map_or(0, |a| a.priority as i32);
         let digi_num = self.assets.digi_map[s];
 
-        if digi_num >= 0 && (digi_num as usize) < self.assets.digi.len() && !self.assets.digi[digi_num as usize].is_empty() {
+        if self.digi_enabled
+            && digi_num >= 0
+            && (digi_num as usize) < self.assets.digi.len()
+            && !self.assets.digi[digi_num as usize].is_empty()
+        {
             if self.digi.is_some() && priority < self.digi_priority {
                 return;
             }
@@ -585,6 +600,7 @@ enum Cmd {
     Play(u8),
     Music(Option<usize>),
     MusicEnabled(bool),
+    DigiEnabled(bool),
 }
 
 /// Why the audio device could not be opened. Never fatal — the game runs silent.
@@ -671,6 +687,17 @@ impl Backend {
         self.music_enabled
     }
 
+    /// Set music on/off explicitly (kept in step with the Sound menu state).
+    pub fn set_music_enabled(&mut self, on: bool) {
+        self.music_enabled = on;
+        let _ = self.tx.send(Cmd::MusicEnabled(on));
+    }
+
+    /// Enable/disable digitized sound effects (the "AdLib only" effects mode).
+    pub fn set_digi_enabled(&self, on: bool) {
+        let _ = self.tx.send(Cmd::DigiEnabled(on));
+    }
+
     pub fn music_enabled(&self) -> bool {
         self.music_enabled
     }
@@ -702,6 +729,7 @@ where
                         Cmd::Play(s) => engine.play_sound(s),
                         Cmd::Music(t) => engine.play_music(t),
                         Cmd::MusicEnabled(on) => engine.set_music_enabled(on),
+                        Cmd::DigiEnabled(on) => engine.set_digi_enabled(on),
                     }
                 }
                 let frames = data.len() / channels.max(1);

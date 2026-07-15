@@ -13,6 +13,8 @@
 //!   firehold:secs            hold fire for the given seconds
 //!   weapon:n                 select weapon n (0 knife .. 3 chaingun)
 //!   key:up|down|enter|esc|any  drive the menu (title/main/episode/difficulty)
+//!   type:hello               type text into the save-name field (one char/tic)
+//!   backspace                delete a character from the save-name field
 //!   wait:1.0                 let time pass (doors keep animating)
 //!   stats                    print health/ammo/score/lives/keys/weapon
 //!   sounds                   print every sound event emitted so far (name+id)
@@ -100,6 +102,15 @@ pub fn run(game: &mut Game, script: &str) {
                     _ => panic!("key wants up|down|enter|esc|any in {cmd:?}"),
                 }
                 game.update(DT, &input);
+            }
+            "type" => {
+                // Feed each character to the save-name text field, one per tic.
+                for c in arg.chars() {
+                    game.update(DT, &Input { typed: Some(c), ..Default::default() });
+                }
+            }
+            "backspace" => {
+                game.update(DT, &Input { backspace: true, ..Default::default() });
             }
             "wait" => step(game, &Input::default(), secs("wait")),
             "snap" => {

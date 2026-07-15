@@ -21,6 +21,7 @@ use crate::assets::maps::{Level, MAP_SIZE};
 use crate::assets::vswap::{TEX_SIZE, VSwap};
 use crate::fb::{Framebuffer, WIDTH, rgb};
 use crate::hud::{KEY_GOLD, KEY_SILVER};
+use crate::savegame::{Reader, SaveError, Writer};
 
 // =============================================================================
 // TILE SEMANTICS (plane 0)
@@ -168,6 +169,54 @@ pub enum Bonus {
     FullHeal,   // 1-up: full health, +25 ammo, +1 life
 }
 
+impl Bonus {
+    /// A stable u8 tag for serialization (`u8::MAX` encodes "no bonus").
+    const NONE: u8 = 0xff;
+    fn to_tag(this: Option<Bonus>) -> u8 {
+        match this {
+            None => Bonus::NONE,
+            Some(b) => match b {
+                Bonus::Alpo => 0,
+                Bonus::Food => 1,
+                Bonus::FirstAid => 2,
+                Bonus::Gibs => 3,
+                Bonus::Clip => 4,
+                Bonus::Clip2 => 5,
+                Bonus::MachineGun => 6,
+                Bonus::ChainGun => 7,
+                Bonus::Key1 => 8,
+                Bonus::Key2 => 9,
+                Bonus::Cross => 10,
+                Bonus::Chalice => 11,
+                Bonus::Bible => 12,
+                Bonus::Crown => 13,
+                Bonus::FullHeal => 14,
+            },
+        }
+    }
+    fn from_tag(tag: u8) -> Result<Option<Bonus>, SaveError> {
+        Ok(Some(match tag {
+            Bonus::NONE => return Ok(None),
+            0 => Bonus::Alpo,
+            1 => Bonus::Food,
+            2 => Bonus::FirstAid,
+            3 => Bonus::Gibs,
+            4 => Bonus::Clip,
+            5 => Bonus::Clip2,
+            6 => Bonus::MachineGun,
+            7 => Bonus::ChainGun,
+            8 => Bonus::Key1,
+            9 => Bonus::Key2,
+            10 => Bonus::Cross,
+            11 => Bonus::Chalice,
+            12 => Bonus::Bible,
+            13 => Bonus::Crown,
+            14 => Bonus::FullHeal,
+            _ => return Err(SaveError::BadEnum("bonus")),
+        }))
+    }
+}
+
 /// Map a plane-1 static spawn code to its bonus type, if any. The code offsets
 /// index the WL_ACT1.C `statinfo[]` table (index = code - STATIC_FIRST); only
 /// the entries whose `type` is a `bo_*` value are pickups.
@@ -289,6 +338,78 @@ impl World {
     /// Drain the door sounds emitted since the last call.
     pub fn take_sounds(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.sounds)
+    }
+
+    // --- Save/load (see src/savegame.rs) -----------------------------------
+
+    /// Serialize the mutable world state: door motion, the (possibly grown)
+    /// static list, and the blocking grid. The immutable map geometry — walls,
+    /// door positions/locks, the door lookup grid — is rebuilt from the level on
+    /// load, so it is not written here.
+    pub fn save(&self, w: &mut Writer) {
+        w.put_u32(self.doors.len() as u32);
+        for d in &self.doors {
+            w.put_f32(d.position);
+            let (tag, hold) = match d.state {
+                DoorState::Closed => (0u8, 0.0),
+                DoorState::Opening => (1, 0.0),
+                DoorState::Open { hold } => (2, hold),
+                DoorState::Closing => (3, 0.0),
+            };
+            w.put_u8(tag);
+            w.put_f32(hold);
+        }
+        w.put_u32(self.statics.len() as u32);
+        for s in &self.statics {
+            w.put_f32(s.x);
+            w.put_f32(s.y);
+            w.put_u32(s.sprite as u32);
+            w.put_u8(Bonus::to_tag(s.bonus));
+            w.put_bool(s.picked);
+        }
+        // The full blocking grid captures picked pickups and drops without
+        // reconstructing each static's blocking type.
+        for &b in &self.blocked {
+            w.put_bool(b);
+        }
+    }
+
+    /// Restore door motion, statics and the blocking grid onto a world freshly
+    /// rebuilt from the same level (so `self.doors` already has the right count,
+    /// positions, locks and textures — only the animation state is overwritten).
+    pub fn load(&mut self, r: &mut Reader) -> Result<(), SaveError> {
+        let ndoors = r.get_u32()? as usize;
+        for i in 0..ndoors {
+            let position = r.get_f32()?;
+            let tag = r.get_u8()?;
+            let hold = r.get_f32()?;
+            let state = match tag {
+                0 => DoorState::Closed,
+                1 => DoorState::Opening,
+                2 => DoorState::Open { hold },
+                3 => DoorState::Closing,
+                _ => return Err(SaveError::BadEnum("door state")),
+            };
+            if let Some(d) = self.doors.get_mut(i) {
+                d.position = position;
+                d.state = state;
+            }
+        }
+        let nstatics = r.get_u32()? as usize;
+        self.statics.clear();
+        self.statics.reserve(nstatics);
+        for _ in 0..nstatics {
+            let x = r.get_f32()?;
+            let y = r.get_f32()?;
+            let sprite = r.get_u32()? as usize;
+            let bonus = Bonus::from_tag(r.get_u8()?)?;
+            let picked = r.get_bool()?;
+            self.statics.push(StaticSprite { x, y, sprite, bonus, picked });
+        }
+        for b in self.blocked.iter_mut() {
+            *b = r.get_bool()?;
+        }
+        Ok(())
     }
 
     // --- Queries used by the actor system (see src/actors.rs) ---

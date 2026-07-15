@@ -8,7 +8,12 @@ use crate::fb::Framebuffer;
 use crate::hud::{self, Hud, HudState, KEY_GOLD, KEY_SILVER, VIEW_H};
 use crate::menu::{self, Menu, MAIN_ITEMS};
 use crate::raycast::{self, Bonus, Player, World};
+use crate::savegame::{self, SaveError};
 use crate::sound as snd;
+
+/// Longest save-slot name the text field accepts (WL_MENU.C allowed 31; the
+/// menu font fits a bit fewer in the slot box).
+pub const SAVE_NAME_MAX: usize = 24;
 
 const MOVE_SPEED: f32 = 3.0; // tiles/sec (Wolf run speed is ~6)
 const RUN_FACTOR: f32 = 2.0;
@@ -42,6 +47,24 @@ pub struct Input {
     pub menu_back: bool,
     /// Any key — advances the title screen to the main menu.
     pub any_key: bool,
+    /// A typed character this tic, for the save-name text field. The frontend
+    /// fills it from the window's text input; the demo driver from `type:`.
+    pub typed: Option<char>,
+    /// Backspace pressed this tic (edge-triggered) — deletes a character.
+    pub backspace: bool,
+}
+
+/// Sound-effect playback mode, the Sound menu's effects radio group. The
+/// original had separate None/PC-Speaker/AdLib and None/SoundBlaster groups;
+/// we collapse them into one three-way choice the frontend honors.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SfxMode {
+    /// Prefer digitized samples, fall back to AdLib (the default, full sound).
+    DigiAdlib,
+    /// AdLib synthesis only — never the digitized samples.
+    AdlibOnly,
+    /// No sound effects at all.
+    Off,
 }
 
 /// Which screen the game is showing. The three menu screens and the title are
@@ -52,6 +75,12 @@ pub enum GameScreen {
     MainMenu,
     Episode,
     Difficulty,
+    /// The Sound-options screen (effects + music radio groups).
+    Sound,
+    /// The Load Game slot list.
+    LoadGame,
+    /// The Save Game slot list (and, when naming, the text entry over a slot).
+    SaveGame,
     Playing,
 }
 
@@ -150,6 +179,22 @@ pub struct Game {
     pub main_sel: usize,
     pub episode_sel: usize,
     pub diff_sel: usize,
+    /// Sound menu cursor (0..2 effects rows, 3..4 music rows).
+    pub sound_sel: usize,
+    /// Shared slot cursor for the Load/Save slot lists.
+    pub ls_sel: usize,
+    /// Cached slot names for the Load/Save menus (refreshed on entry).
+    pub save_slots: Vec<Option<String>>,
+    /// True while the Save screen is capturing a slot name.
+    pub entering_name: bool,
+    /// The slot-name text buffer being typed.
+    pub save_name: String,
+
+    // --- Sound options (consumed by the frontend audio path) ---
+    /// Sound-effects playback mode (Sound menu effects group).
+    pub sfx_mode: SfxMode,
+    /// Whether music plays (Sound menu music group / the `M` shortcut).
+    pub music_on: bool,
     /// True once a game has been started from the menu (so Esc in the menu can
     /// resume play rather than fall back to the title).
     pub started: bool,
@@ -221,6 +266,13 @@ impl Game {
             main_sel: 0,
             episode_sel: 0,
             diff_sel: 0,
+            sound_sel: 0,
+            ls_sel: 0,
+            save_slots: vec![None; savegame::NUM_SLOTS],
+            entering_name: false,
+            save_name: String::new(),
+            sfx_mode: SfxMode::DigiAdlib,
+            music_on: true,
             started: true,
             should_quit: false,
             health: 100,
@@ -294,6 +346,9 @@ impl Game {
             GameScreen::MainMenu => self.update_main_menu(input),
             GameScreen::Episode => self.update_episode(input),
             GameScreen::Difficulty => self.update_difficulty(input),
+            GameScreen::Sound => self.update_sound(input),
+            GameScreen::LoadGame => self.update_load(input),
+            GameScreen::SaveGame => self.update_save(input),
             GameScreen::Playing => {
                 if input.menu_back {
                     // Esc pauses to the main menu (WL_PLAY.C's US_ControlPanel).
@@ -317,14 +372,20 @@ impl Game {
         }
     }
 
+    /// Whether main-menu item `i` is selectable. Save Game is only available
+    /// once a game is in progress (WL_MENU.C greys it outside of play).
+    pub fn main_item_active(&self, i: usize) -> bool {
+        MAIN_ITEMS[i].active && (i != menu::ITEM_SAVE || self.started)
+    }
+
     /// Move the cursor to the next selectable item in `dir` (+1 / -1), skipping
     /// the greyed-out entries (the original leaves them unselectable).
-    fn move_selectable(sel: usize, dir: i32) -> usize {
+    fn move_selectable(&self, sel: usize, dir: i32) -> usize {
         let n = MAIN_ITEMS.len() as i32;
         let mut i = sel as i32;
         for _ in 0..n {
             i = (i + dir).rem_euclid(n);
-            if MAIN_ITEMS[i as usize].active {
+            if self.main_item_active(i as usize) {
                 break;
             }
         }
@@ -333,10 +394,10 @@ impl Game {
 
     fn update_main_menu(&mut self, input: &Input) {
         if input.menu_up {
-            self.main_sel = Self::move_selectable(self.main_sel, -1);
+            self.main_sel = self.move_selectable(self.main_sel, -1);
         }
         if input.menu_down {
-            self.main_sel = Self::move_selectable(self.main_sel, 1);
+            self.main_sel = self.move_selectable(self.main_sel, 1);
         }
         if input.menu_back {
             // Back out of the menu: resume a game in progress, else to title.
@@ -349,10 +410,213 @@ impl Game {
                     self.episode_sel = 0;
                     self.screen = GameScreen::Episode;
                 }
+                menu::ITEM_SOUND => {
+                    self.sound_sel = self.sfx_mode as usize;
+                    self.screen = GameScreen::Sound;
+                }
+                menu::ITEM_LOAD => {
+                    self.refresh_slots();
+                    self.ls_sel = 0;
+                    self.screen = GameScreen::LoadGame;
+                }
+                menu::ITEM_SAVE if self.started => {
+                    self.refresh_slots();
+                    self.ls_sel = 0;
+                    self.entering_name = false;
+                    self.screen = GameScreen::SaveGame;
+                }
                 menu::ITEM_QUIT => self.should_quit = true,
                 _ => {}
             }
         }
+    }
+
+    // --- Sound options (WL_MENU.C CP_Sound) --------------------------------
+
+    fn update_sound(&mut self, input: &Input) {
+        const ROWS: usize = 5; // 3 effects rows + 2 music rows
+        if input.menu_up {
+            self.sound_sel = (self.sound_sel + ROWS - 1) % ROWS;
+        }
+        if input.menu_down {
+            self.sound_sel = (self.sound_sel + 1) % ROWS;
+        }
+        if input.menu_back {
+            self.screen = GameScreen::MainMenu;
+            self.main_sel = menu::ITEM_SOUND;
+            return;
+        }
+        if input.menu_enter {
+            match self.sound_sel {
+                0 => self.sfx_mode = SfxMode::DigiAdlib,
+                1 => self.sfx_mode = SfxMode::AdlibOnly,
+                2 => self.sfx_mode = SfxMode::Off,
+                3 => self.music_on = true,
+                _ => self.music_on = false,
+            }
+        }
+    }
+
+    // --- Load / Save (WL_MENU.C CP_LoadGame / CP_SaveGame) ------------------
+
+    /// Re-read the ten save-slot names for the menu (empty slots stay `None`).
+    fn refresh_slots(&mut self) {
+        self.save_slots = (0..savegame::NUM_SLOTS)
+            .map(|s| savegame::read_slot_header(s).map(|h| h.name))
+            .collect();
+    }
+
+    fn update_load(&mut self, input: &Input) {
+        let n = savegame::NUM_SLOTS;
+        if input.menu_up {
+            self.ls_sel = (self.ls_sel + n - 1) % n;
+        }
+        if input.menu_down {
+            self.ls_sel = (self.ls_sel + 1) % n;
+        }
+        if input.menu_back {
+            self.screen = GameScreen::MainMenu;
+            self.main_sel = menu::ITEM_LOAD;
+            return;
+        }
+        if input.menu_enter && self.save_slots[self.ls_sel].is_some() {
+            // A failed load leaves the current game untouched (apply_save only
+            // mutates self once the whole file has parsed on a fresh level).
+            let _ = self.load_from_slot(self.ls_sel);
+        }
+    }
+
+    fn update_save(&mut self, input: &Input) {
+        let n = savegame::NUM_SLOTS;
+        if self.entering_name {
+            if input.menu_back {
+                self.entering_name = false;
+                return;
+            }
+            if input.menu_enter {
+                let name = if self.save_name.trim().is_empty() {
+                    format!("Save {}", self.ls_sel + 1)
+                } else {
+                    self.save_name.clone()
+                };
+                let _ = self.save_to_slot(self.ls_sel, &name);
+                self.entering_name = false;
+                self.refresh_slots();
+                // Saving from the pause menu returns to play (WL_MENU.C).
+                self.screen = GameScreen::Playing;
+                return;
+            }
+            if input.backspace {
+                self.save_name.pop();
+            }
+            if let Some(c) = input.typed
+                && !c.is_control()
+                && self.save_name.chars().count() < SAVE_NAME_MAX
+            {
+                self.save_name.push(c);
+            }
+            return;
+        }
+        if input.menu_up {
+            self.ls_sel = (self.ls_sel + n - 1) % n;
+        }
+        if input.menu_down {
+            self.ls_sel = (self.ls_sel + 1) % n;
+        }
+        if input.menu_back {
+            self.screen = GameScreen::MainMenu;
+            self.main_sel = menu::ITEM_SAVE;
+            return;
+        }
+        if input.menu_enter {
+            // Prefill the field with the existing name when overwriting a slot.
+            self.save_name = self.save_slots[self.ls_sel].clone().unwrap_or_default();
+            self.entering_name = true;
+        }
+    }
+
+    /// Whether the frontend should route key presses to the save-name field
+    /// (so gameplay/global shortcuts like `Q`/`M` don't fire while typing).
+    pub fn is_text_entry(&self) -> bool {
+        self.screen == GameScreen::SaveGame && self.entering_name
+    }
+
+    // --- Save-game serialization (see src/savegame.rs) ---------------------
+
+    /// Serialize the whole live game to a versioned byte buffer.
+    pub fn write_save(&self, name: &str) -> Vec<u8> {
+        let mut w = savegame::Writer::new();
+        savegame::write_header(&mut w, name, self.level_idx, self.difficulty.skill());
+        w.put_f32(self.player.x);
+        w.put_f32(self.player.y);
+        w.put_f32(self.player.angle);
+        w.put_i32(self.health);
+        w.put_i32(self.ammo);
+        w.put_i32(self.score);
+        w.put_i32(self.lives);
+        w.put_u8(self.keys);
+        w.put_u32(self.weapon as u32);
+        w.put_bool(self.victory);
+        // In-progress weapon swing (WL_AGENT.C T_Attack): part of the mid-fight
+        // state, so a save taken mid-swing resumes at the same animation phase.
+        w.put_bool(self.attacking);
+        w.put_u32(self.attack_frame as u32);
+        w.put_f32(self.attack_count);
+        w.put_u32(self.weapon_frame as u32);
+        self.world.save(&mut w);
+        self.actors.save(&mut w);
+        w.buf
+    }
+
+    /// Restore the game from a save buffer. On success the game is left on the
+    /// saved floor, in `Playing`, resuming exactly where it was saved. On any
+    /// parse error the game is left as it was (the level is only rebuilt after
+    /// the header validates, and stats/actors are applied last).
+    pub fn apply_save(&mut self, data: &[u8]) -> Result<(), SaveError> {
+        let mut r = savegame::Reader::new(data);
+        let header = savegame::read_header(&mut r)?;
+        // Peek the body into locals before touching self, so a truncated file
+        // can't leave us half-loaded.
+        let level_idx = header.level_idx.min(self.maps.num_levels() - 1);
+        self.difficulty = Difficulty::from_index(header.difficulty as usize);
+        self.level_idx = level_idx;
+        self.load_level(); // rebuild world + actors + player for this floor
+
+        self.player.x = r.get_f32()?;
+        self.player.y = r.get_f32()?;
+        self.player.angle = r.get_f32()?;
+        self.health = r.get_i32()?;
+        self.ammo = r.get_i32()?;
+        self.score = r.get_i32()?;
+        self.lives = r.get_i32()?;
+        self.keys = r.get_u8()?;
+        self.weapon = r.get_u32()? as usize;
+        self.victory = r.get_bool()?;
+        self.attacking = r.get_bool()?;
+        self.attack_frame = r.get_u32()? as usize;
+        self.attack_count = r.get_f32()?;
+        self.weapon_frame = r.get_u32()? as usize;
+        self.world.load(&mut r)?;
+        self.actors.load(&mut r)?;
+
+        self.died = false;
+        self.started = true;
+        self.screen = GameScreen::Playing;
+        Ok(())
+    }
+
+    /// Save the current game to slot `slot` under `name` (creates `saves/`).
+    pub fn save_to_slot(&self, slot: usize, name: &str) -> Result<(), SaveError> {
+        let bytes = self.write_save(name);
+        std::fs::create_dir_all(savegame::saves_dir())?;
+        std::fs::write(savegame::slot_path(slot), bytes)?;
+        Ok(())
+    }
+
+    /// Load slot `slot` into the current game.
+    pub fn load_from_slot(&mut self, slot: usize) -> Result<(), SaveError> {
+        let data = std::fs::read(savegame::slot_path(slot))?;
+        self.apply_save(&data)
     }
 
     fn update_episode(&mut self, input: &Input) {
@@ -716,7 +980,7 @@ impl Game {
                 return;
             }
             GameScreen::MainMenu => {
-                self.menu.render_main(fb, self.main_sel);
+                self.menu.render_main(fb, self.main_sel, self.started);
                 return;
             }
             GameScreen::Episode => {
@@ -725,6 +989,24 @@ impl Game {
             }
             GameScreen::Difficulty => {
                 self.menu.render_difficulty(fb, self.diff_sel);
+                return;
+            }
+            GameScreen::Sound => {
+                self.menu.render_sound(fb, self.sfx_mode, self.music_on, self.sound_sel);
+                return;
+            }
+            GameScreen::LoadGame => {
+                self.menu.render_load(fb, &self.save_slots, self.ls_sel);
+                return;
+            }
+            GameScreen::SaveGame => {
+                self.menu.render_save(
+                    fb,
+                    &self.save_slots,
+                    self.ls_sel,
+                    self.entering_name,
+                    &self.save_name,
+                );
                 return;
             }
             GameScreen::Playing => {}

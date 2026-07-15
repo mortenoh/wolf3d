@@ -42,6 +42,17 @@ pub const C_OPTIONSPIC: usize = 10;
 /// Gun cursor, two animation frames (pointing / firing).
 pub const C_CURSOR1PIC: usize = 11;
 pub const C_CURSOR2PIC: usize = 12;
+/// Sound-menu radio buttons: the empty and filled bullet art.
+pub const C_NOTSELECTEDPIC: usize = 13;
+pub const C_SELECTEDPIC: usize = 14;
+/// Sound-menu section titles ("Sound Effects" / "Digitized" / "AdLib Music").
+/// There is no `C_SOUNDPIC` in GFXV_WL6.H; CP_Sound draws these three title
+/// pics instead. We collapse to the effects and music groups.
+pub const C_FXTITLEPIC: usize = 15;
+pub const C_MUSICTITLEPIC: usize = 17;
+/// Load / Save game screen header art.
+pub const C_LOADGAMEPIC: usize = 28;
+pub const C_SAVEGAMEPIC: usize = 29;
 /// Difficulty banners, one per skill: "Can I play, Daddy?" (baby), "Don't hurt
 /// me." (easy), "Bring 'em on!" (normal), "I am Death incarnate!" (hard). Each
 /// carries a BJ mugshot whose expression hardens with the skill.
