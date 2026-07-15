@@ -96,10 +96,12 @@ pub fn run(game: &mut Game, script: &str) {
                 match arg {
                     "up" => input.menu_up = true,
                     "down" => input.menu_down = true,
+                    "left" => input.menu_left = true,
+                    "right" => input.menu_right = true,
                     "enter" => input.menu_enter = true,
                     "esc" => input.menu_back = true,
                     "any" => input.any_key = true,
-                    _ => panic!("key wants up|down|enter|esc|any in {cmd:?}"),
+                    _ => panic!("key wants up|down|left|right|enter|esc|any in {cmd:?}"),
                 }
                 game.update(DT, &input);
             }
@@ -181,6 +183,10 @@ pub fn run(game: &mut Game, script: &str) {
                         .collect();
                     println!("sounds: {}", list.join(" "));
                 }
+            }
+            "levelselect" => {
+                game.level_sel = game.level_idx;
+                game.screen = crate::game::GameScreen::LevelSelect;
             }
             "victory" => {
                 println!("victory: {}", game.victory);

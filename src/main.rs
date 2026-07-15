@@ -277,6 +277,8 @@ struct App {
     // Edge-triggered menu navigation (consumed once per key-down).
     menu_up: bool,
     menu_down: bool,
+    menu_left: bool,
+    menu_right: bool,
     menu_enter: bool,
     menu_back: bool,
     any_key: bool,
@@ -307,6 +309,8 @@ impl App {
             mouse_dx: 0.0,
             cursor_grabbed: false,
             menu_up: false,
+            menu_left: false,
+            menu_right: false,
             menu_down: false,
             menu_enter: false,
             menu_back: false,
@@ -383,6 +387,8 @@ impl App {
             turn_delta: std::mem::take(&mut self.mouse_dx) * MOUSE_SENSITIVITY,
             menu_up: std::mem::take(&mut self.menu_up),
             menu_down: std::mem::take(&mut self.menu_down),
+            menu_left: std::mem::take(&mut self.menu_left),
+            menu_right: std::mem::take(&mut self.menu_right),
             menu_enter: std::mem::take(&mut self.menu_enter),
             menu_back: std::mem::take(&mut self.menu_back),
             any_key: std::mem::take(&mut self.any_key),
@@ -531,6 +537,8 @@ impl ApplicationHandler for App {
                             }
                             KeyCode::ArrowUp | KeyCode::KeyW => self.menu_up = true,
                             KeyCode::ArrowDown | KeyCode::KeyS => self.menu_down = true,
+                            KeyCode::ArrowLeft | KeyCode::KeyA => self.menu_left = true,
+                            KeyCode::ArrowRight | KeyCode::KeyD => self.menu_right = true,
                             KeyCode::Enter | KeyCode::NumpadEnter => self.menu_enter = true,
                             KeyCode::KeyM => {
                                 // Toggle music through the game state so the
@@ -544,6 +552,10 @@ impl ApplicationHandler for App {
                             KeyCode::Digit3 => self.weapon_pressed = Some(2),
                             KeyCode::Digit4 => self.weapon_pressed = Some(3),
                             // --- Cheats (during play only) ---
+                            KeyCode::Digit6 if playing => {
+                                self.game.level_sel = self.game.level_idx;
+                                self.game.screen = GameScreen::LevelSelect;
+                            }
                             KeyCode::Digit7 if playing => {
                                 self.game.god = !self.game.god;
                                 self.refresh_title();

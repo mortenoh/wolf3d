@@ -273,6 +273,44 @@ impl Menu {
 
     /// The Load Game slot list (WL_MENU.C CP_LoadGame): filled slots show their
     /// name, empty slots grey out as "- EMPTY -" and cannot be chosen.
+    /// The level-select cheat grid (not in the original): 6 episode columns x
+    /// 10 floor rows in the house menu style; the selected map's name shows
+    /// under the grid.
+    pub fn render_level_select(&self, fb: &mut Framebuffer, names: &[String], selected: usize) {
+        clear(fb, BORDCOLOR);
+        self.font.draw_centered(fb, 4, "Warp to which level?", HIGHLIGHT);
+
+        const GRID_X: i32 = 34; // centers 6 x 42px columns
+        const GRID_Y: i32 = 24;
+        const COL_W: i32 = 42;
+        const ROW_H: i32 = 14;
+        draw_window(fb, GRID_X - 8, GRID_Y - 3, 6 * COL_W + 10, 11 * ROW_H + 2, BKGDCOLOR);
+
+        for ep in 0..6i32 {
+            let x = GRID_X + ep * COL_W;
+            self.font.draw(fb, x, GRID_Y, &format!("E{}", ep + 1), TEXTCOLOR);
+            for floor in 0..10i32 {
+                let idx = (ep * 10 + floor) as usize;
+                let y = GRID_Y + (floor + 1) * ROW_H;
+                let sel = idx == selected;
+                if sel {
+                    // A highlight bar behind the selected cell.
+                    draw_window(fb, x - 3, y - 2, COL_W - 6, ROW_H - 2, STRIPE);
+                }
+                let label = match floor {
+                    8 => "Boss".to_string(),
+                    9 => "Scrt".to_string(),
+                    f => format!("F{}", f + 1),
+                };
+                let color = if sel { HIGHLIGHT } else { TEXTCOLOR };
+                self.font.draw(fb, x, y, &label, color);
+            }
+        }
+
+        let name = names.get(selected).map(String::as_str).unwrap_or("?");
+        self.font.draw_centered(fb, GRID_Y + 11 * ROW_H + 4, name, HIGHLIGHT);
+    }
+
     pub fn render_load(&self, fb: &mut Framebuffer, slots: &[Option<String>], selected: usize) {
         self.render_slot_list(fb, &self.ls_titles[0], slots, selected, false, "");
     }

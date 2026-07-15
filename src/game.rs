@@ -49,6 +49,9 @@ pub struct Input {
     pub menu_enter: bool,
     /// Esc / back: leaves the current menu, or opens the menu from play.
     pub menu_back: bool,
+    /// Left/right on grid menus (currently only the level-select cheat).
+    pub menu_left: bool,
+    pub menu_right: bool,
     /// Any key — advances the title screen to the main menu.
     pub any_key: bool,
     /// A typed character this tic, for the save-name text field. The frontend
@@ -108,6 +111,9 @@ pub enum GameScreen {
     HighScoreEntry,
     /// The "Read This!" help article (WL_TEXT.C `HelpScreens`).
     ReadThis,
+    /// The level-select cheat screen (the 6 key during play): a 6x10
+    /// episode/floor grid; Enter warps, keeping the current stats.
+    LevelSelect,
 }
 
 /// Skill level (WL_DEF.H `gd_*`). Controls enemy spawns (see
@@ -293,6 +299,10 @@ pub struct Game {
     pub sound_sel: usize,
     /// Shared slot cursor for the Load/Save slot lists.
     pub ls_sel: usize,
+    /// Level-select cheat cursor (a level index, 0..num_levels).
+    pub level_sel: usize,
+    /// Lazily-built map names for the level-select screen.
+    level_names: Option<Vec<String>>,
     /// Cached slot names for the Load/Save menus (refreshed on entry).
     pub save_slots: Vec<Option<String>>,
     /// True while the Save screen is capturing a slot name.
@@ -404,6 +414,8 @@ impl Game {
             diff_sel: 0,
             sound_sel: 0,
             ls_sel: 0,
+            level_sel: 0,
+            level_names: None,
             save_slots: vec![None; savegame::NUM_SLOTS],
             entering_name: false,
             save_name: String::new(),
@@ -505,6 +517,7 @@ impl Game {
             GameScreen::HighScores => self.update_high_scores(input),
             GameScreen::HighScoreEntry => self.update_high_score_entry(input),
             GameScreen::ReadThis => self.update_read_this(input),
+            GameScreen::LevelSelect => self.update_level_select(input),
         }
         // The menu cursor blink advances on the menu screens (not during play or
         // the intermission / load / endgame screens, which run their own clocks).
@@ -769,6 +782,37 @@ impl Game {
                 self.screen = GameScreen::MainMenu;
                 self.main_sel = menu::ITEM_READ;
             }
+        }
+    }
+
+    /// The level-select cheat grid: left/right change episode, up/down change
+    /// floor, Enter warps (stats carry over, keys reset like any floor change),
+    /// Esc resumes play.
+    fn update_level_select(&mut self, input: &Input) {
+        if input.menu_back {
+            self.screen = GameScreen::Playing;
+            return;
+        }
+        let n = self.maps.num_levels(); // 60: 6 episodes x 10 floors
+        let (mut ep, mut floor) = (self.level_sel / 10, self.level_sel % 10);
+        if input.menu_left {
+            ep = (ep + n / 10 - 1) % (n / 10);
+        }
+        if input.menu_right {
+            ep = (ep + 1) % (n / 10);
+        }
+        if input.menu_up {
+            floor = (floor + 9) % 10;
+        }
+        if input.menu_down {
+            floor = (floor + 1) % 10;
+        }
+        self.level_sel = ep * 10 + floor;
+        if input.menu_enter {
+            self.level_idx = self.level_sel;
+            self.keys = 0;
+            self.load_level();
+            self.screen = GameScreen::Playing;
         }
     }
 
@@ -1535,6 +1579,13 @@ impl Game {
                 if let Some(t) = &self.readthis {
                     t.render(fb, &self.vga, self.readthis_page);
                 }
+                return;
+            }
+            GameScreen::LevelSelect => {
+                let names = self.level_names.get_or_insert_with(|| {
+                    (0..self.maps.num_levels()).map(|i| self.maps.level(i).name).collect()
+                });
+                self.menu.render_level_select(fb, names, self.level_sel);
                 return;
             }
             GameScreen::Playing => {}

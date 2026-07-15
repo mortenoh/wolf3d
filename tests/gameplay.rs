@@ -37,3 +37,30 @@ fn walk_through_first_door() {
         "doors should have auto-closed"
     );
 }
+
+/// The 6-key level-select grid: navigation moves episode/floor, Enter warps
+/// with stats intact, Esc resumes without warping.
+#[test]
+fn level_select_warps_and_preserves_stats() {
+    use wolf3d::game::GameScreen;
+
+    let mut game = Game::new(0);
+    game.score = 4200;
+    game.level_sel = game.level_idx;
+    game.screen = GameScreen::LevelSelect;
+
+    // Esc backs out without changing the level.
+    game.update(DT, &Input { menu_back: true, ..Default::default() });
+    assert_eq!(game.screen, GameScreen::Playing);
+    assert_eq!(game.level_idx, 0);
+
+    // Right one episode, down one floor, Enter: warp to E2 floor 2 (index 11).
+    game.screen = GameScreen::LevelSelect;
+    game.update(DT, &Input { menu_right: true, ..Default::default() });
+    game.update(DT, &Input { menu_down: true, ..Default::default() });
+    game.update(DT, &Input { menu_enter: true, ..Default::default() });
+    assert_eq!(game.screen, GameScreen::Playing);
+    assert_eq!(game.level_idx, 11);
+    assert_eq!(game.score, 4200, "warp must keep stats");
+    assert_eq!(game.keys, 0, "warp resets keys like any floor change");
+}
