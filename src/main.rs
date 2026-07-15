@@ -299,7 +299,10 @@ impl App {
             run: down(KeyCode::ShiftLeft),
             use_door: std::mem::take(&mut self.use_pressed),
             select_weapon: self.weapon_pressed.take(),
-            fire: down(KeyCode::ControlLeft) || down(KeyCode::ControlRight) || self.mouse_fire,
+            fire: down(KeyCode::Space)
+                || down(KeyCode::ControlLeft)
+                || down(KeyCode::ControlRight)
+                || self.mouse_fire,
         };
         self.game.update(dt, &input);
     }
@@ -357,7 +360,7 @@ impl ApplicationHandler for App {
                                     }
                                 }
                             }
-                            KeyCode::Space | KeyCode::KeyE => self.use_pressed = true,
+                            KeyCode::KeyE => self.use_pressed = true,
                             KeyCode::Digit1 => self.weapon_pressed = Some(0),
                             KeyCode::Digit2 => self.weapon_pressed = Some(1),
                             KeyCode::Digit3 => self.weapon_pressed = Some(2),
