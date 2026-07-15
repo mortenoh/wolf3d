@@ -2,5 +2,7 @@
 //! data files, displayed through a minimal winit/wgpu blit (see main.rs).
 
 pub mod assets;
+pub mod demo;
 pub mod fb;
+pub mod game;
 pub mod raycast;

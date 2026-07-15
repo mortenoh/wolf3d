@@ -3,7 +3,7 @@
 //! each frame and stretch it onto the window (nearest-neighbor, letterboxed
 //! to 4:3 — the original's display aspect).
 
-use wolf3d::{assets, fb, raycast};
+use wolf3d::{demo, fb, game};
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -15,9 +15,8 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use assets::{MapSet, VSwap};
 use fb::{Framebuffer, HEIGHT, WIDTH};
-use raycast::{Player, World};
+use game::{Game, Input};
 
 // =============================================================================
 // GPU BLITTER
@@ -243,19 +242,13 @@ impl Gpu {
 // APP / GAME LOOP
 // =============================================================================
 
-const MOVE_SPEED: f32 = 3.0; // tiles/sec (Wolf run speed is ~6)
-const TURN_SPEED: f32 = 2.4; // rad/sec
-
 struct App {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     fb: Framebuffer,
-    vswap: VSwap,
-    maps: MapSet,
-    world: World,
-    level_idx: usize,
-    player: Player,
+    game: Game,
     keys: HashSet<KeyCode>,
+    use_pressed: bool,
     last_frame: Instant,
     fps_frames: u32,
     fps_since: Instant,
@@ -263,30 +256,14 @@ struct App {
 }
 
 impl App {
-    fn new() -> Self {
-        let dir = assets::data_dir();
-        let vswap = VSwap::load(&dir)
-            .unwrap_or_else(|e| panic!("failed to load VSWAP.WL6 from {dir:?}: {e}"));
-        let maps = MapSet::load(&dir)
-            .unwrap_or_else(|e| panic!("failed to load GAMEMAPS from {dir:?}: {e}"));
-        // WOLF3D_LEVEL=n starts on level n (1-based), handy for debugging.
-        let level_idx = std::env::var("WOLF3D_LEVEL")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .map(|n| (n - 1).min(maps.num_levels() - 1))
-            .unwrap_or(0);
-        let world = World::new(maps.level(level_idx));
-        let player = raycast::find_spawn(&world.level);
+    fn new(game: Game) -> Self {
         Self {
             window: None,
             gpu: None,
             fb: Framebuffer::new(),
-            vswap,
-            maps,
-            world,
-            level_idx: 0,
-            player,
+            game,
             keys: HashSet::new(),
+            use_pressed: false,
             last_frame: Instant::now(),
             fps_frames: 0,
             fps_since: Instant::now(),
@@ -294,63 +271,31 @@ impl App {
         }
     }
 
-    fn switch_level(&mut self, dir: i32) {
-        let n = self.maps.num_levels() as i32;
-        self.level_idx = ((self.level_idx as i32 + dir).rem_euclid(n)) as usize;
-        self.world = World::new(self.maps.level(self.level_idx));
-        self.player = raycast::find_spawn(&self.world.level);
-        self.refresh_title();
-    }
-
     fn refresh_title(&self) {
         if let Some(w) = &self.window {
             w.set_title(&format!(
                 "wolf3d — {} ({}/{}) — {} fps",
-                self.world.level.name,
-                self.level_idx + 1,
-                self.maps.num_levels(),
+                self.game.world.level.name,
+                self.game.level_idx + 1,
+                self.game.maps.num_levels(),
                 self.fps,
             ));
         }
     }
 
     fn update(&mut self, dt: f32) {
-        self.world.tick(dt, &self.player);
-        let p = &mut self.player;
         let down = |k: KeyCode| self.keys.contains(&k);
-
-        if down(KeyCode::ArrowLeft) {
-            p.angle -= TURN_SPEED * dt;
-        }
-        if down(KeyCode::ArrowRight) {
-            p.angle += TURN_SPEED * dt;
-        }
-
-        let speed = if down(KeyCode::ShiftLeft) { MOVE_SPEED * 2.0 } else { MOVE_SPEED };
-        let (dx, dy) = (p.angle.cos(), p.angle.sin());
-        let mut mx = 0.0f32;
-        let mut my = 0.0f32;
-        if down(KeyCode::KeyW) || down(KeyCode::ArrowUp) {
-            mx += dx;
-            my += dy;
-        }
-        if down(KeyCode::KeyS) || down(KeyCode::ArrowDown) {
-            mx -= dx;
-            my -= dy;
-        }
-        if down(KeyCode::KeyA) {
-            mx += dy;
-            my -= dx;
-        }
-        if down(KeyCode::KeyD) {
-            mx -= dy;
-            my += dx;
-        }
-        let len = (mx * mx + my * my).sqrt();
-        if len > 0.0 {
-            self.player
-                .walk(&self.world, mx / len * speed * dt, my / len * speed * dt);
-        }
+        let input = Input {
+            forward: down(KeyCode::KeyW) || down(KeyCode::ArrowUp),
+            back: down(KeyCode::KeyS) || down(KeyCode::ArrowDown),
+            strafe_left: down(KeyCode::KeyA),
+            strafe_right: down(KeyCode::KeyD),
+            turn_left: down(KeyCode::ArrowLeft),
+            turn_right: down(KeyCode::ArrowRight),
+            run: down(KeyCode::ShiftLeft),
+            use_door: std::mem::take(&mut self.use_pressed),
+        };
+        self.game.update(dt, &input);
     }
 }
 
@@ -401,11 +346,15 @@ impl ApplicationHandler for App {
                                     }
                                 }
                             }
-                            KeyCode::Space | KeyCode::KeyE => {
-                                self.world.use_door(&self.player);
+                            KeyCode::Space | KeyCode::KeyE => self.use_pressed = true,
+                            KeyCode::KeyN => {
+                                self.game.switch_level(1);
+                                self.refresh_title();
                             }
-                            KeyCode::KeyN => self.switch_level(1),
-                            KeyCode::KeyP => self.switch_level(-1),
+                            KeyCode::KeyP => {
+                                self.game.switch_level(-1);
+                                self.refresh_title();
+                            }
                             _ => {}
                         }
                     }
@@ -422,7 +371,7 @@ impl ApplicationHandler for App {
                 self.last_frame = now;
 
                 self.update(dt);
-                raycast::render(&mut self.fb, &self.vswap, &self.world, &self.player);
+                self.game.render(&mut self.fb);
                 if let Some(gpu) = &mut self.gpu {
                     gpu.render(&self.fb);
                 }
@@ -471,7 +420,21 @@ fn set_fullscreen(w: &Window, on: bool) {
 }
 
 fn main() {
+    // WOLF3D_LEVEL=n starts on level n (1-based), handy for debugging.
+    let level_idx = std::env::var("WOLF3D_LEVEL")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map_or(0, |n| n.saturating_sub(1));
+    let mut game = Game::new(level_idx);
+
+    // WOLF3D_DEMO="w:1;use;wait:1;snap:door" plays scripted input headless
+    // (no window) and writes framebuffer snapshots; see src/demo.rs.
+    if let Ok(script) = std::env::var("WOLF3D_DEMO") {
+        demo::run(&mut game, &script);
+        return;
+    }
+
     let event_loop = EventLoop::new().expect("event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop.run_app(&mut App::new()).expect("run");
+    event_loop.run_app(&mut App::new(game)).expect("run");
 }
