@@ -10,3 +10,4 @@ pub mod game;
 pub mod hud;
 pub mod menu;
 pub mod raycast;
+pub mod sound;

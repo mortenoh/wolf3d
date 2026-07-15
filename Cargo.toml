@@ -8,6 +8,11 @@ bytemuck = "1.25.1"
 pollster = "1.0.1"
 wgpu = "30.0.0"
 winit = "0.30.13"
+# Digitized/AdLib audio: cpal drives the output device; nuked-opl3 is a pure-Rust
+# port of the Nuked-OPL3 YMF262 core, used to render the AdLib sound effects and
+# IMF music the original played through an OPL2.
+cpal = "0.18.1"
+nuked-opl3 = "0.1.0"
 
 # Software rendering needs the optimizer even in dev builds.
 [profile.dev]

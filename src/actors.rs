@@ -38,6 +38,7 @@
 
 use crate::assets::maps::{Level, MAP_SIZE};
 use crate::raycast::{Bonus, World};
+use crate::sound as snd;
 
 // =============================================================================
 // FIXED-POINT / TUNING CONSTANTS (from WL_DEF.H, converted to tile units)
@@ -608,6 +609,12 @@ pub struct Actors {
     /// Kinds killed this update, drained by the caller (used for the victory
     /// condition in place of the original's A_StartDeathCam deathcam).
     deaths: Vec<Kind>,
+    /// Sound-enum ids emitted by enemy actions this update, drained by the game.
+    sounds: Vec<u8>,
+    /// A dedicated RNG for cosmetic sound choices (the random guard death
+    /// scream). Kept separate from `rnd` so audio never perturbs the gameplay
+    /// random stream that the deterministic tests depend on.
+    snd_rnd: Rnd,
 }
 
 // =============================================================================
@@ -653,6 +660,37 @@ impl Projectile {
                 370 + rotation_from_angle(facing, self.x, self.y, viewer_x, viewer_y) // SPR_ROCKET_1..8
             }
         }
+    }
+}
+
+/// The sound an enemy makes on first sighting the player (WL_STATE.C
+/// FirstSighting). The mutant is silent.
+fn alert_sound(kind: Kind) -> Option<u8> {
+    Some(match kind {
+        Kind::Guard => snd::HALTSND as u8,
+        Kind::Officer => snd::SPIONSND as u8,
+        Kind::Ss => snd::SCHUTZADSND as u8,
+        Kind::Dog => snd::DOGBARKSND as u8,
+        Kind::Hans => snd::GUTENTAGSND as u8,
+        Kind::Gretel => snd::KEINSND as u8,
+        Kind::Gift => snd::EINESND as u8,
+        Kind::Fat => snd::ERLAUBENSND as u8,
+        Kind::Schabbs => snd::SCHABBSHASND as u8,
+        Kind::FakeHitler => snd::TOT_HUNDSND as u8,
+        Kind::MechaHitler | Kind::Hitler => snd::DIESND as u8,
+        Kind::Mutant => return None,
+    })
+}
+
+/// The sound an enemy makes when firing (WL_ACT2.C T_Shoot).
+fn shoot_sound(kind: Kind) -> u8 {
+    match kind {
+        Kind::Ss => snd::SSFIRESND as u8,
+        Kind::Gift | Kind::Fat => snd::MISSILEFIRESND as u8,
+        Kind::MechaHitler | Kind::Hitler | Kind::Hans => snd::BOSSFIRESND as u8,
+        Kind::Schabbs => snd::SCHABBSTHROWSND as u8,
+        Kind::FakeHitler => snd::FLAMETHROWERSND as u8,
+        _ => snd::NAZIFIRESND as u8,
     }
 }
 
@@ -779,12 +817,19 @@ impl Actors {
             damage: 0,
             drops: Vec::new(),
             deaths: Vec::new(),
+            sounds: Vec::new(),
+            snd_rnd: Rnd::new(),
         }
     }
 
     /// Drain the enemy drops accumulated since the last call.
     pub fn take_drops(&mut self) -> Vec<(i32, i32, Bonus)> {
         std::mem::take(&mut self.drops)
+    }
+
+    /// Drain the enemy sound events accumulated since the last call.
+    pub fn take_sounds(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.sounds)
     }
 
     /// Drain the kinds killed since the last call.
@@ -953,7 +998,11 @@ impl Actors {
     #[allow(clippy::too_many_arguments)]
     fn run_action(&mut self, i: usize, action: Action, world: &World, px: f32, py: f32, ptx: i32, pty: i32, running: bool) {
         match action {
-            Action::None | Action::DeathScream => {}
+            Action::None => {}
+            Action::DeathScream => {
+                let s = self.death_sound(self.list[i].kind);
+                self.sounds.push(s);
+            }
             Action::Shoot => self.t_shoot(i, world, px, py, ptx, pty, running),
             Action::Bite => self.t_bite(i, px, py),
             Action::ThrowNeedle => self.throw(i, px, py, ProjKind::Needle),
@@ -1032,6 +1081,9 @@ impl Actors {
     // ---- FirstSighting / combat entry (WL_STATE.C) ------------------------
 
     fn first_sighting(&mut self, i: usize) {
+        if let Some(s) = alert_sound(self.list[i].kind) {
+            self.sounds.push(s);
+        }
         let kd = self.table.kinds[self.list[i].kind.index()];
         let mult = self.list[i].kind.chase_mult();
         let a = &mut self.list[i];
@@ -1464,6 +1516,7 @@ impl Actors {
         if !check_line(world, a.x, a.y, px, py) {
             return;
         }
+        self.sounds.push(shoot_sound(a.kind));
         let dx = (a.tilex - ptx).abs();
         let dy = (a.tiley - pty).abs();
         let mut dist = dx.max(dy);
@@ -1491,6 +1544,7 @@ impl Actors {
     }
 
     fn t_bite(&mut self, i: usize, px: f32, py: f32) {
+        self.sounds.push(snd::DOGATTACKSND as u8);
         let a = &self.list[i];
         let dx = (px - a.x).abs() - 1.0;
         if dx <= MIN_ACTOR_DIST {
@@ -1581,6 +1635,29 @@ impl Actors {
         0
     }
 
+    /// The death cry for a dying enemy (WL_ACT2.C A_DeathScream). Guards pick a
+    /// random scream from a dedicated RNG so the choice never disturbs gameplay.
+    fn death_sound(&mut self, kind: Kind) -> u8 {
+        match kind {
+            Kind::Guard => {
+                let i = self.snd_rnd.roll() as usize % snd::GUARD_DEATH_SCREAMS.len();
+                snd::GUARD_DEATH_SCREAMS[i]
+            }
+            Kind::Mutant => snd::AHHHGSND as u8,
+            Kind::Officer => snd::NEINSOVASSND as u8,
+            Kind::Ss => snd::LEBENSND as u8,
+            Kind::Dog => snd::DOGDEATHSND as u8,
+            Kind::Hans => snd::MUTTISND as u8,
+            Kind::Schabbs => snd::MEINGOTTSND as u8,
+            Kind::FakeHitler => snd::HITLERHASND as u8,
+            Kind::MechaHitler => snd::SCHEISTSND as u8,
+            Kind::Hitler => snd::EVASND as u8,
+            Kind::Gretel => snd::MEINSND as u8,
+            Kind::Gift => snd::DONNERSND as u8,
+            Kind::Fat => snd::ROSESND as u8,
+        }
+    }
+
     fn kill_actor(&mut self, i: usize) -> i32 {
         let kd = self.table.kinds[self.list[i].kind.index()];
         let a = &mut self.list[i];
@@ -1602,6 +1679,11 @@ impl Actors {
     /// T_SchabbThrow / T_GiftThrow / T_FakeFire: launch a projectile from the
     /// actor toward the player's current position.
     fn throw(&mut self, i: usize, px: f32, py: f32, kind: ProjKind) {
+        self.sounds.push(match kind {
+            ProjKind::Needle => snd::SCHABBSTHROWSND as u8,
+            ProjKind::Rocket => snd::MISSILEFIRESND as u8,
+            ProjKind::Fire => snd::FLAMETHROWERSND as u8,
+        });
         let a = &self.list[i];
         let angle = (py - a.y).atan2(px - a.x);
         // Raw speeds in global units per tic: 0x2000 needle/rocket, 0x1200 fire.

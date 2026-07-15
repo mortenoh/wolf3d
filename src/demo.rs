@@ -15,7 +15,12 @@
 //!   key:up|down|enter|esc|any  drive the menu (title/main/episode/difficulty)
 //!   wait:1.0                 let time pass (doors keep animating)
 //!   stats                    print health/ammo/score/lives/keys/weapon
+//!   sounds                   print every sound event emitted so far (name+id)
 //!   snap:name                write <out>/name.ppm
+//!
+//! Sound events are drained from the game each step. `WOLF3D_LOG_SOUNDS=1` also
+//! prints each event as it fires, so tests can assert that a combat action made
+//! the right noise without any audio device.
 //! Debug-only commands (for scripting fights that would otherwise need a
 //! pixel-perfect human; not reachable from normal play):
 //!   teleport:x,y,deg         place the player at (x, y) facing deg degrees
@@ -40,6 +45,10 @@ pub fn run(game: &mut Game, script: &str) {
     let out = std::env::var("WOLF3D_SNAP_DIR").unwrap_or_else(|_| "snaps".into());
     std::fs::create_dir_all(&out).expect("create snapshot dir");
     let mut fb = Framebuffer::new();
+
+    // Sound events are drained after each command so nothing accumulates unseen.
+    let log_sounds = std::env::var("WOLF3D_LOG_SOUNDS").as_deref() == Ok("1");
+    let mut sound_log: Vec<u8> = Vec::new();
 
     for cmd in script.split(';').map(str::trim).filter(|c| !c.is_empty()) {
         let (op, arg) = cmd.split_once(':').unwrap_or((cmd, ""));
@@ -151,6 +160,17 @@ pub fn run(game: &mut Game, script: &str) {
                     game.update(DT, &Input { fire: target.is_some(), ..Default::default() });
                 }
             }
+            "sounds" => {
+                if sound_log.is_empty() {
+                    println!("sounds: (none)");
+                } else {
+                    let list: Vec<String> = sound_log
+                        .iter()
+                        .map(|&id| format!("{}({id})", crate::sound::name(id)))
+                        .collect();
+                    println!("sounds: {}", list.join(" "));
+                }
+            }
             "victory" => {
                 println!("victory: {}", game.victory);
             }
@@ -181,6 +201,15 @@ pub fn run(game: &mut Game, script: &str) {
                 }
             }
             _ => panic!("unknown demo command {cmd:?}"),
+        }
+
+        // Collect any sounds this command produced (and echo them live when
+        // WOLF3D_LOG_SOUNDS=1).
+        for id in game.take_sounds() {
+            if log_sounds {
+                println!("sound: {}({id})", crate::sound::name(id));
+            }
+            sound_log.push(id);
         }
     }
 }

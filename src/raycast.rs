@@ -62,7 +62,7 @@ const DOOR_HOLD_TIME: f32 = 4.3; // ~300 tics before auto-close
 /// A door must be nearly fully open before you can walk through.
 const DOOR_PASSABLE: f32 = 0.9;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 enum DoorState {
     Closed,
     Opening,
@@ -86,7 +86,10 @@ pub struct Door {
 }
 
 impl Door {
-    fn tick(&mut self, dt: f32, player_on_tile: bool) {
+    /// Advance one door. Returns a sound-enum id when the door begins a motion
+    /// that the original announced (auto-close after the hold, or reopening onto
+    /// the player) — see WL_ACT1.C `DoorClose`/`DoorOpen`.
+    fn tick(&mut self, dt: f32, player_on_tile: bool) -> Option<u8> {
         match self.state {
             DoorState::Opening => {
                 self.position += dt / DOOR_OPEN_TIME;
@@ -94,29 +97,35 @@ impl Door {
                     self.position = 1.0;
                     self.state = DoorState::Open { hold: DOOR_HOLD_TIME };
                 }
+                None
             }
             DoorState::Open { ref mut hold } => {
                 if player_on_tile {
                     *hold = DOOR_HOLD_TIME; // don't close on top of the player
+                    None
                 } else {
                     *hold -= dt;
                     if *hold <= 0.0 {
                         self.state = DoorState::Closing;
+                        return Some(crate::sound::CLOSEDOORSND as u8);
                     }
+                    None
                 }
             }
             DoorState::Closing => {
                 if player_on_tile {
                     self.state = DoorState::Opening; // reopen rather than trap
+                    Some(crate::sound::OPENDOORSND as u8)
                 } else {
                     self.position -= dt / DOOR_OPEN_TIME;
                     if self.position <= 0.0 {
                         self.position = 0.0;
                         self.state = DoorState::Closed;
                     }
+                    None
                 }
             }
-            DoorState::Closed => {}
+            DoorState::Closed => None,
         }
     }
 }
@@ -226,6 +235,8 @@ pub struct World {
     /// Tiles occupied by a live actor, republished each tic by the actor
     /// system; the player collides with these.
     pub actor_blocked: Vec<bool>,
+    /// Sound-enum ids emitted by door activity this tic; drained by the game.
+    pub sounds: Vec<u8>,
 }
 
 impl World {
@@ -272,7 +283,12 @@ impl World {
             }
         }
         let actor_blocked = vec![false; MAP_SIZE * MAP_SIZE];
-        Self { level, statics, doors, door_grid, blocked, actor_blocked }
+        Self { level, statics, doors, door_grid, blocked, actor_blocked, sounds: Vec::new() }
+    }
+
+    /// Drain the door sounds emitted since the last call.
+    pub fn take_sounds(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.sounds)
     }
 
     // --- Queries used by the actor system (see src/actors.rs) ---
@@ -304,7 +320,10 @@ impl World {
     /// Start opening a door (idempotent) — enemies call this to pass through.
     pub fn request_open_door(&mut self, idx: usize) {
         let d = &mut self.doors[idx];
-        if d.state == DoorState::Closed || d.state == DoorState::Closing {
+        if d.state == DoorState::Closed {
+            d.state = DoorState::Opening;
+            self.sounds.push(crate::sound::OPENDOORSND as u8);
+        } else if d.state == DoorState::Closing {
             d.state = DoorState::Opening;
         }
     }
@@ -326,13 +345,15 @@ impl World {
     pub fn tick(&mut self, dt: f32, p: &Player) {
         let (px, py) = (p.x.floor() as i32, p.y.floor() as i32);
         for d in &mut self.doors {
-            d.tick(dt, d.x == px && d.y == py);
+            if let Some(snd) = d.tick(dt, d.x == px && d.y == py) {
+                self.sounds.push(snd);
+            }
         }
     }
 
     /// The use key: open/close the door in the tile the player faces. A locked
-    /// door (WL_ACT1.C OperateDoor) does nothing unless `keys` holds its key —
-    /// the original plays a "no way" sound; we have no text/audio, so refuse.
+    /// door (WL_ACT1.C OperateDoor) does nothing but play "no way" unless `keys`
+    /// holds its key.
     pub fn use_door(&mut self, p: &Player, keys: u8) {
         let tx = (p.x + p.angle.cos()).floor() as i32;
         let ty = (p.y + p.angle.sin()).floor() as i32;
@@ -343,13 +364,23 @@ impl World {
         {
             let d = &mut self.doors[idx as usize - 1];
             if d.lock != 0 && keys & d.lock == 0 {
-                return; // locked and we lack the key
+                self.sounds.push(crate::sound::NOWAYSND as u8); // locked, lack the key
+                return;
             }
-            d.state = match d.state {
+            let new = match d.state {
                 DoorState::Closed | DoorState::Closing => DoorState::Opening,
                 _ if on_it => DoorState::Opening,
                 _ => DoorState::Closing,
             };
+            let snd = match (d.state, new) {
+                (DoorState::Closed | DoorState::Closing, DoorState::Opening) => Some(crate::sound::OPENDOORSND as u8),
+                (_, DoorState::Closing) => Some(crate::sound::CLOSEDOORSND as u8),
+                _ => None,
+            };
+            d.state = new;
+            if let Some(s) = snd {
+                self.sounds.push(s);
+            }
         }
     }
 

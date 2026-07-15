@@ -3,11 +3,14 @@
 //! each frame and stretch it onto the window (nearest-neighbor, letterboxed
 //! to 4:3 — the original's display aspect).
 
-use wolf3d::{demo, fb, game};
+use wolf3d::{demo, fb, game, sound};
 
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
+
+use wolf3d::assets::audio::AudioData;
+use wolf3d::sound::{Backend, SoundAssets};
 
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -16,7 +19,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use fb::{Framebuffer, HEIGHT, WIDTH};
-use game::{Game, Input};
+use game::{Game, GameScreen, Input};
 
 // =============================================================================
 // GPU BLITTER
@@ -247,6 +250,11 @@ struct App {
     gpu: Option<Gpu>,
     fb: Framebuffer,
     game: Game,
+    /// Audio output (None when no device / data is available — the game runs
+    /// silent). The simulation never touches this; it consumes drained events.
+    sound: Option<Backend>,
+    /// The music track currently requested, so we only re-issue on change.
+    current_music: Option<usize>,
     keys: HashSet<KeyCode>,
     use_pressed: bool,
     weapon_pressed: Option<u8>,
@@ -264,12 +272,14 @@ struct App {
 }
 
 impl App {
-    fn new(game: Game) -> Self {
+    fn new(game: Game, sound: Option<Backend>) -> Self {
         Self {
             window: None,
             gpu: None,
             fb: Framebuffer::new(),
             game,
+            sound,
+            current_music: None,
             keys: HashSet::new(),
             use_pressed: false,
             weapon_pressed: None,
@@ -321,6 +331,30 @@ impl App {
             any_key: std::mem::take(&mut self.any_key),
         };
         self.game.update(dt, &input);
+        self.sync_audio();
+    }
+
+    /// Feed the tic's emitted sound events to the backend and keep the music in
+    /// step with the current screen/level.
+    fn sync_audio(&mut self) {
+        let sounds = self.game.take_sounds();
+        let screen = self.game.screen;
+        let level = self.game.level_idx;
+        let Some(backend) = &mut self.sound else { return };
+        for id in sounds {
+            backend.play(id);
+        }
+        // Title is silent; the menus share the menu song; play the level song
+        // while playing.
+        let desired = match screen {
+            GameScreen::Title => None,
+            GameScreen::Playing => Some(sound::song_for_level(level)),
+            _ => Some(sound::MENU_SONG),
+        };
+        if desired != self.current_music {
+            self.current_music = desired;
+            backend.set_music(desired);
+        }
     }
 }
 
@@ -383,6 +417,12 @@ impl ApplicationHandler for App {
                             KeyCode::ArrowUp | KeyCode::KeyW => self.menu_up = true,
                             KeyCode::ArrowDown | KeyCode::KeyS => self.menu_down = true,
                             KeyCode::Enter | KeyCode::NumpadEnter => self.menu_enter = true,
+                            KeyCode::KeyM => {
+                                if let Some(b) = &mut self.sound {
+                                    let on = b.toggle_music();
+                                    println!("music: {}", if on { "on" } else { "off" });
+                                }
+                            }
                             KeyCode::KeyE => self.use_pressed = true,
                             KeyCode::Digit1 => self.weapon_pressed = Some(0),
                             KeyCode::Digit2 => self.weapon_pressed = Some(1),
@@ -491,7 +531,26 @@ fn main() {
         return;
     }
 
+    // Open the audio device for the windowed path. Any failure (no device, no
+    // sound data) is non-fatal: the game just runs silent.
+    let sound = match AudioData::load(&wolf3d::assets::data_dir()) {
+        Ok(audio) => {
+            let assets = SoundAssets::new(audio, game.vswap.digi.clone());
+            match Backend::start(assets) {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    eprintln!("audio disabled: {e}");
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("audio disabled: could not load AUDIOT/AUDIOHED: {e}");
+            None
+        }
+    };
+
     let event_loop = EventLoop::new().expect("event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop.run_app(&mut App::new(game)).expect("run");
+    event_loop.run_app(&mut App::new(game, sound)).expect("run");
 }

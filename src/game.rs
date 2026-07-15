@@ -8,6 +8,7 @@ use crate::fb::Framebuffer;
 use crate::hud::{self, Hud, HudState, KEY_GOLD, KEY_SILVER, VIEW_H};
 use crate::menu::{self, Menu, MAIN_ITEMS};
 use crate::raycast::{self, Bonus, Player, World};
+use crate::sound as snd;
 
 const MOVE_SPEED: f32 = 3.0; // tiles/sec (Wolf run speed is ~6)
 const RUN_FACTOR: f32 = 2.0;
@@ -88,6 +89,24 @@ const TIC: f32 = 1.0 / 70.0;
 /// The boss whose death completes each episode's floor 9 (level index
 /// episode*10 + 8 in the WL6 map set). The real Hitler — not the mecha suit —
 /// is E3's end boss.
+/// The pickup sound for a bonus item (WL_AGENT.C GetBonus).
+fn bonus_sound(bonus: Bonus) -> u8 {
+    match bonus {
+        Bonus::Alpo | Bonus::Food => snd::HEALTH1SND as u8,
+        Bonus::FirstAid => snd::HEALTH2SND as u8,
+        Bonus::Gibs => snd::SLURPIESND as u8,
+        Bonus::Clip | Bonus::Clip2 => snd::GETAMMOSND as u8,
+        Bonus::MachineGun => snd::GETMACHINESND as u8,
+        Bonus::ChainGun => snd::GETGATLINGSND as u8,
+        Bonus::Key1 | Bonus::Key2 => snd::GETKEYSND as u8,
+        Bonus::Cross => snd::BONUS1SND as u8,
+        Bonus::Chalice => snd::BONUS2SND as u8,
+        Bonus::Bible => snd::BONUS3SND as u8,
+        Bonus::Crown => snd::BONUS4SND as u8,
+        Bonus::FullHeal => snd::BONUS1UPSND as u8,
+    }
+}
+
 pub fn end_boss(level_idx: usize) -> Option<Kind> {
     match level_idx {
         8 => Some(Kind::Hans),
@@ -159,6 +178,11 @@ pub struct Game {
     fire_held: bool,
     /// Player run speed exceeded the dodge threshold this frame (thrustspeed).
     running: bool,
+
+    /// Sound-enum ids emitted by the player/UI this tic. The frontend drains
+    /// this (plus the actor and world queues) via [`Game::take_sounds`]; the
+    /// simulation itself never touches audio, so headless runs stay deterministic.
+    pub sounds: Vec<u8>,
 }
 
 impl Game {
@@ -211,7 +235,18 @@ impl Game {
             weapon_frame: 0,
             fire_held: false,
             running: false,
+            sounds: Vec::new(),
         }
+    }
+
+    /// Drain every sound-enum id emitted since the last call — the player/UI
+    /// events plus the enemy and door queues. The frontend feeds these to the
+    /// audio backend; a headless run can log them to assert sounds fired.
+    pub fn take_sounds(&mut self) -> Vec<u8> {
+        let mut v = std::mem::take(&mut self.sounds);
+        v.extend(self.actors.take_sounds());
+        v.extend(self.world.take_sounds());
+        v
     }
 
     /// Rebuild the current level's world, actors, and player start.
@@ -377,6 +412,7 @@ impl Game {
         if input.use_door {
             // Cmd_Use: elevator switch completes the floor; otherwise a door.
             if self.world.use_elevator(&self.player) {
+                self.sounds.push(snd::LEVELDONESND as u8);
                 self.next_level();
                 return;
             }
@@ -460,6 +496,7 @@ impl Game {
         if self.health <= 0 {
             self.health = 0;
             self.died = true;
+            self.sounds.push(snd::PLAYERDEATHSND as u8);
             self.lives -= 1;
             // Restart the level with a fresh loadout (the original's respawn).
             self.load_level();
@@ -529,6 +566,11 @@ impl Game {
     }
 
     fn fire_gun(&mut self) {
+        self.sounds.push(match self.weapon {
+            WEAPON_MACHINEGUN => snd::ATKMACHINEGUNSND as u8,
+            WEAPON_CHAINGUN => snd::ATKGATLINGSND as u8,
+            _ => snd::ATKPISTOLSND as u8,
+        });
         let points = self.actors.player_fire(
             &self.world,
             self.player.x,
@@ -541,6 +583,7 @@ impl Game {
     }
 
     fn fire_knife(&mut self) {
+        self.sounds.push(snd::ATKKNIFESND as u8);
         let points = self.actors.player_fire(
             &self.world,
             self.player.x,
@@ -579,7 +622,16 @@ impl Game {
 
     /// Apply a bonus to the player's stats. Returns false (leaving the item) for
     /// health/ammo pickups when already at the cap — the original's early return.
+    /// Emits the pickup sound only when the item is actually taken (GetBonus).
     fn get_bonus(&mut self, bonus: Bonus) -> bool {
+        let took = self.apply_bonus(bonus);
+        if took {
+            self.sounds.push(bonus_sound(bonus));
+        }
+        took
+    }
+
+    fn apply_bonus(&mut self, bonus: Bonus) -> bool {
         match bonus {
             Bonus::Alpo => self.heal(4),
             Bonus::Food => self.heal(10),
