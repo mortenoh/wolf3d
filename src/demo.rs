@@ -33,15 +33,25 @@
 //!                            live enemy each tic (scripts cannot track a
 //!                            dodging boss with coarse turn commands)
 //!   victory                  print the victory flag
+//! Attract-demo recording (see src/demorec.rs):
+//!   record:path              start recording every subsequent tic's input to
+//!                            a demo file at `path` (header captures the
+//!                            current level/rng/camera/loadout, so do any
+//!                            teleport/face/godmode setup BEFORE this)
+//!   endrecord                stop recording and write the file
 //! Output dir comes from WOLF3D_SNAP_DIR (default "snaps").
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use crate::demorec::Demo;
 use crate::fb::{Framebuffer, HEIGHT, WIDTH};
 use crate::game::{Game, Input, TURN_SPEED};
 
 const DT: f32 = 1.0 / 70.0; // the original's tic rate
+
+/// An in-progress `record:` capture: the output path and the demo being built.
+type Recording = Option<(PathBuf, Demo)>;
 
 pub fn run(game: &mut Game, script: &str) {
     let out = std::env::var("WOLF3D_SNAP_DIR").unwrap_or_else(|_| "snaps".into());
@@ -51,6 +61,7 @@ pub fn run(game: &mut Game, script: &str) {
     // Sound events are drained after each command so nothing accumulates unseen.
     let log_sounds = std::env::var("WOLF3D_LOG_SOUNDS").as_deref() == Ok("1");
     let mut sound_log: Vec<u8> = Vec::new();
+    let mut rec: Recording = None;
 
     for cmd in script.split(';').map(str::trim).filter(|c| !c.is_empty()) {
         let (op, arg) = cmd.split_once(':').unwrap_or((cmd, ""));
@@ -69,7 +80,7 @@ pub fn run(game: &mut Game, script: &str) {
                     run: op != key, // uppercase = shift held
                     ..Default::default()
                 };
-                step(game, &input, secs("hold"));
+                step(game, &input, secs("hold"), &mut rec);
             }
             "l" | "r" => {
                 let input = Input {
@@ -77,18 +88,20 @@ pub fn run(game: &mut Game, script: &str) {
                     turn_right: op == "r",
                     ..Default::default()
                 };
-                step(game, &input, secs("degrees").to_radians() / TURN_SPEED);
+                step(game, &input, secs("degrees").to_radians() / TURN_SPEED, &mut rec);
             }
             "use" => {
-                game.update(DT, &Input { use_door: true, ..Default::default() });
+                tick(game, &Input { use_door: true, ..Default::default() }, &mut rec);
             }
             "fire" => {
-                game.update(DT, &Input { fire: true, ..Default::default() });
+                tick(game, &Input { fire: true, ..Default::default() }, &mut rec);
             }
-            "firehold" => step(game, &Input { fire: true, ..Default::default() }, secs("firehold")),
+            "firehold" => {
+                step(game, &Input { fire: true, ..Default::default() }, secs("firehold"), &mut rec)
+            }
             "weapon" => {
                 let w = arg.parse::<u8>().expect("weapon wants 0..=3");
-                game.update(DT, &Input { select_weapon: Some(w), ..Default::default() });
+                tick(game, &Input { select_weapon: Some(w), ..Default::default() }, &mut rec);
             }
             "key" => {
                 // Drive the menu flow headlessly: key:up|down|enter|esc|any.
@@ -114,7 +127,7 @@ pub fn run(game: &mut Game, script: &str) {
             "backspace" => {
                 game.update(DT, &Input { backspace: true, ..Default::default() });
             }
-            "wait" => step(game, &Input::default(), secs("wait")),
+            "wait" => step(game, &Input::default(), secs("wait"), &mut rec),
             "snap" => {
                 // Keep snapshots observation-pure: rendering marks actor
                 // visibility (original FL_VISABLE behavior), which would
@@ -166,12 +179,30 @@ pub fn run(game: &mut Game, script: &str) {
                         .filter(|a| !a.dead && crate::actors::line_clear(&game.world, px, py, a.x, a.y))
                         .map(|a| ((a.x - px).powi(2) + (a.y - py).powi(2), a.x, a.y))
                         .min_by(|a, b| a.0.total_cmp(&b.0));
-                    if let Some((_, bx, by)) = target {
-                        game.player.angle = (by - py).atan2(bx - px);
-                    }
+                    // Express the aim as this tic's turn_delta (rather than
+                    // writing the angle directly), so a `record:` capture can
+                    // replay the aiming purely from the input stream.
+                    let turn_delta = target
+                        .map_or(0.0, |(_, bx, by)| (by - py).atan2(bx - px) - game.player.angle);
                     // Hold fire while a target is in sight; idle otherwise.
-                    game.update(DT, &Input { fire: target.is_some(), ..Default::default() });
+                    tick(
+                        game,
+                        &Input { fire: target.is_some(), turn_delta, ..Default::default() },
+                        &mut rec,
+                    );
                 }
+            }
+            // --- Attract-demo recording (src/demorec.rs) ---
+            "record" => {
+                assert!(rec.is_none(), "record: while already recording");
+                assert!(!arg.is_empty(), "record wants a path in {cmd:?}");
+                rec = Some((PathBuf::from(arg), Demo::begin(game)));
+                println!("record: started ({arg})");
+            }
+            "endrecord" => {
+                let (path, demo) = rec.take().expect("endrecord without record:");
+                demo.write_to(&path).expect("write demo file");
+                println!("endrecord: {} ({} tics)", path.display(), demo.tics.len());
             }
             "sounds" => {
                 if sound_log.is_empty() {
@@ -190,6 +221,27 @@ pub fn run(game: &mut Game, script: &str) {
             }
             "victory" => {
                 println!("victory: {}", game.victory);
+            }
+            "secrets" => {
+                // Debug: list every push-wall tile (plane-1 code 98) with its
+                // distance from the player (for choreographing demo recordings).
+                let (px, py) = (game.player.x, game.player.y);
+                for (i, &c) in game.world.level.plane1.iter().enumerate() {
+                    if c == 98 {
+                        let (x, y) = ((i % 64) as f32 + 0.5, (i / 64) as f32 + 0.5);
+                        let d = ((x - px).powi(2) + (y - py).powi(2)).sqrt();
+                        println!("secret: pushwall at ({}, {}) dist {d:.1}", i % 64, i / 64);
+                    }
+                }
+            }
+            "actors" => {
+                // Debug: list every live actor with its distance from the player
+                // (for choreographing demo recordings).
+                let (px, py) = (game.player.x, game.player.y);
+                for a in game.actors.list.iter().filter(|a| !a.dead) {
+                    let d = ((a.x - px).powi(2) + (a.y - py).powi(2)).sqrt();
+                    println!("actor: {:?} at ({:.1}, {:.1}) dist {:.1}", a.kind, a.x, a.y, d);
+                }
             }
             "pos" => {
                 let p = &game.player;
@@ -229,12 +281,26 @@ pub fn run(game: &mut Game, script: &str) {
             sound_log.push(id);
         }
     }
+
+    // A recording left open at script end is closed and written implicitly.
+    if let Some((path, demo)) = rec.take() {
+        demo.write_to(&path).expect("write demo file");
+        println!("endrecord: {} ({} tics, implicit at script end)", path.display(), demo.tics.len());
+    }
+}
+
+/// Advance one tic, appending the input to the active recording (if any).
+fn tick(game: &mut Game, input: &Input, rec: &mut Recording) {
+    if let Some((_, demo)) = rec {
+        demo.push(input);
+    }
+    game.update(DT, input);
 }
 
 /// Run whole tics until `secs` of virtual time has passed.
-fn step(game: &mut Game, input: &Input, secs: f32) {
+fn step(game: &mut Game, input: &Input, secs: f32, rec: &mut Recording) {
     for _ in 0..(secs / DT).round() as u32 {
-        game.update(DT, input);
+        tick(game, input, rec);
     }
 }
 

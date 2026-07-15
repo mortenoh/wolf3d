@@ -4,6 +4,7 @@
 
 use crate::actors::{Actors, Kind};
 use crate::config::{self, Config, MAX_MOUSE_SENS, MAX_VIEW, MIN_VIEW, VIEW_STEP};
+use crate::demorec::Demo;
 use crate::assets::vgagraph::{T_ENDART1, T_HELPART};
 use crate::assets::{self, MapSet, VSwap, VgaGraph};
 use crate::fb::Framebuffer;
@@ -80,6 +81,12 @@ pub enum SfxMode {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GameScreen {
     Title,
+    /// The attract-loop credits page (CREDITSPIC), between the title and the
+    /// high-score board (WL_MAIN.C DemoLoop).
+    Credits,
+    /// Attract-mode demo playback: a recorded [`Demo`] replayed with the "DEMO"
+    /// overlay (WL_PLAY.C PlayDemo). Any key stops it and opens the main menu.
+    Attract,
     MainMenu,
     Episode,
     Difficulty,
@@ -167,6 +174,14 @@ const DEATH_SECS: f32 = 1.0;
 /// Deathcam duration (WL_ACT2.C `IN_UserInput(300)`): ~300 tics before it auto-
 /// advances to the victory screen (any key skips it).
 const DEATHCAM_SECS: f32 = 300.0 / 70.0;
+
+/// How long the title screen lingers before the attract loop auto-advances to
+/// the credits page (WL_MAIN.C's title `TimeCount` timeout, ~15 s).
+pub const ATTRACT_TITLE_SECS: f32 = 15.0;
+/// How long the credits page shows before advancing to the high scores.
+pub const ATTRACT_CREDITS_SECS: f32 = 8.0;
+/// How long the high-score board shows in the attract loop before a demo plays.
+pub const ATTRACT_SCORES_SECS: f32 = 8.0;
 
 /// Where the high-score board returns to after it is dismissed.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -299,6 +314,31 @@ pub struct Game {
     epi_time_sum: i32,
     epi_count: i32,
 
+    // --- Attract loop (WL_MAIN.C DemoLoop) ---------------------------------
+    /// True while the title / credits / scores / demo attract loop is running.
+    /// Any key drops out to the main menu; a started game clears it.
+    pub attract_mode: bool,
+    /// Clock driving the title/credits/scores auto-advance in the attract loop.
+    attract_clock: f32,
+    /// Which loaded demo the loop plays next (round-robins through `demos`).
+    attract_demo_idx: usize,
+    /// The demos loaded from `demos/` at startup; empty if none (the loop then
+    /// skips the demo stage). Populated by [`Game::load_attract_demos`].
+    pub demos: Vec<Demo>,
+    /// The active demo's per-tic input stream during `Attract` playback.
+    attract_tics: Vec<Input>,
+    /// Playback cursor into `attract_tics`.
+    attract_cursor: usize,
+    /// Real-time accumulator so demo playback advances at a fixed 70 Hz tic rate
+    /// regardless of the window's frame rate (matching how it was recorded).
+    attract_accum: f32,
+    /// The active demo's `windowed` flag: replay re-marks render visibility
+    /// every tic (see `demorec` module docs on determinism).
+    attract_windowed: bool,
+    /// Scratch framebuffer for the per-tic visibility-marking renders of
+    /// windowed demos (allocated on first use, then reused).
+    attract_fb: Option<Framebuffer>,
+
     // --- Front-end / menu state ---
     pub screen: GameScreen,
     pub difficulty: Difficulty,
@@ -426,6 +466,15 @@ impl Game {
             epi_tr_sum: 0,
             epi_time_sum: 0,
             epi_count: 0,
+            attract_mode: false,
+            attract_clock: 0.0,
+            attract_demo_idx: 0,
+            demos: Vec::new(),
+            attract_tics: Vec::new(),
+            attract_cursor: 0,
+            attract_accum: 0.0,
+            attract_windowed: false,
+            attract_fb: None,
             screen: GameScreen::Playing,
             difficulty,
             main_sel: 0,
@@ -504,17 +553,29 @@ impl Game {
         self.keys = 0;
     }
 
-    /// Boot into the title screen (used when no `WOLF3D_LEVEL` pins a level).
+    /// Boot into the title screen and (re)start the attract loop (used at boot,
+    /// after a game over / victory, and by the "Back to Demo" menu entry).
     pub fn to_title(&mut self) {
         self.screen = GameScreen::Title;
         self.started = false;
         self.main_sel = 0;
+        self.attract_mode = true;
+        self.attract_clock = 0.0;
+    }
+
+    /// Load the shipped attract demos from `demos/` (called once by the frontend
+    /// at boot). Headless tests never call this, so their `demos` stays empty and
+    /// the attract loop simply skips the demo stage.
+    pub fn load_attract_demos(&mut self) {
+        self.demos = crate::demorec::load_all();
     }
 
     /// Frame entry point: dispatch to the menu flow or the simulation.
     pub fn update(&mut self, dt: f32, input: &Input) {
         match self.screen {
-            GameScreen::Title => self.update_title(input),
+            GameScreen::Title => self.update_title(dt, input),
+            GameScreen::Credits => self.update_credits(dt, input),
+            GameScreen::Attract => self.update_attract(dt, input),
             GameScreen::MainMenu => self.update_main_menu(input),
             GameScreen::Episode => self.update_episode(input),
             GameScreen::Difficulty => self.update_difficulty(input),
@@ -535,7 +596,7 @@ impl Game {
             GameScreen::DeathCam => self.update_deathcam(dt, input),
             GameScreen::Victory => self.update_victory(dt, input),
             GameScreen::EndText => self.update_endtext(input),
-            GameScreen::HighScores => self.update_high_scores(input),
+            GameScreen::HighScores => self.update_high_scores(dt, input),
             GameScreen::HighScoreEntry => self.update_high_score_entry(input),
             GameScreen::ReadThis => self.update_read_this(input),
             GameScreen::LevelSelect => self.update_level_select(input),
@@ -547,6 +608,8 @@ impl Game {
         if matches!(
             self.screen,
             GameScreen::Title
+                | GameScreen::Credits
+                | GameScreen::Attract
                 | GameScreen::MainMenu
                 | GameScreen::Episode
                 | GameScreen::Difficulty
@@ -776,7 +839,26 @@ impl Game {
         }
     }
 
-    fn update_high_scores(&mut self, input: &Input) {
+    fn update_high_scores(&mut self, dt: f32, input: &Input) {
+        // In the attract loop the board is a timed stage: any key drops to the
+        // menu, otherwise it auto-advances to a demo (or loops to the title).
+        if self.attract_mode {
+            if input.any_key || input.menu_enter || input.menu_back {
+                self.enter_menu_from_attract();
+                return;
+            }
+            self.attract_clock += dt;
+            if self.attract_clock >= ATTRACT_SCORES_SECS {
+                self.attract_clock = 0.0;
+                if self.demos.is_empty() {
+                    self.to_title(); // no demos: loop back to the title
+                } else {
+                    let demo = self.demos[self.attract_demo_idx % self.demos.len()].clone();
+                    self.start_attract_demo(&demo);
+                }
+            }
+            return;
+        }
         if input.any_key || input.menu_enter || input.menu_back {
             match self.hs_return {
                 HsReturn::Menu => {
@@ -862,11 +944,137 @@ impl Game {
 
     // --- Menu state machine (WL_MENU.C) ------------------------------------
 
-    fn update_title(&mut self, input: &Input) {
-        if input.any_key || input.menu_enter || input.menu_up || input.menu_down {
-            self.screen = GameScreen::MainMenu;
-            self.main_sel = menu::ITEM_NEW_GAME;
+    fn update_title(&mut self, dt: f32, input: &Input) {
+        if input.any_key || input.menu_enter || input.menu_up || input.menu_down || input.menu_back {
+            self.enter_menu_from_attract();
+            return;
         }
+        // Attract loop: the title auto-advances to the credits page.
+        if self.attract_mode {
+            self.attract_clock += dt;
+            if self.attract_clock >= ATTRACT_TITLE_SECS {
+                self.screen = GameScreen::Credits;
+                self.attract_clock = 0.0;
+            }
+        }
+    }
+
+    /// A key during the attract loop drops out to the main menu (WL_MAIN.C
+    /// DemoLoop: any keypress leaves the demo cycle).
+    fn enter_menu_from_attract(&mut self) {
+        self.attract_mode = false;
+        // Never let a demo's replayed god flag outlive the demo.
+        self.god = false;
+        self.screen = GameScreen::MainMenu;
+        self.main_sel = menu::ITEM_NEW_GAME;
+    }
+
+    /// The attract-loop credits page: auto-advances to the high-score board;
+    /// any key drops to the main menu.
+    fn update_credits(&mut self, dt: f32, input: &Input) {
+        if input.any_key || input.menu_enter || input.menu_back {
+            self.enter_menu_from_attract();
+            return;
+        }
+        self.attract_clock += dt;
+        if self.attract_clock >= ATTRACT_CREDITS_SECS {
+            // Show the high-score board next (in the attract flow, not the menu).
+            self.hs_return = HsReturn::Title;
+            self.hs_edit_slot = None;
+            self.screen = GameScreen::HighScores;
+            self.attract_clock = 0.0;
+        }
+    }
+
+    /// Attract-mode demo playback: replay the active demo at a fixed 70 Hz,
+    /// feeding each recorded tic to the play simulation. Any key stops the demo
+    /// and opens the main menu (WL_PLAY.C PlayDemo).
+    fn update_attract(&mut self, dt: f32, input: &Input) {
+        if input.any_key
+            || input.menu_enter
+            || input.menu_back
+            || input.fire
+            || input.use_door
+        {
+            self.enter_menu_from_attract();
+            return;
+        }
+        self.attract_accum += dt;
+        while self.attract_accum >= TIC {
+            self.attract_accum -= TIC;
+            if self.attract_cursor >= self.attract_tics.len() {
+                self.finish_attract_demo();
+                return;
+            }
+            let recorded = self.attract_tics[self.attract_cursor];
+            self.attract_cursor += 1;
+            self.update_play(TIC, &recorded);
+            // If the recorded run ended the floor (death / elevator / boss kill),
+            // the sim changes screen — treat that as the end of the demo.
+            if self.screen != GameScreen::Attract {
+                self.finish_attract_demo();
+                return;
+            }
+            // Windowed demos embed the recorder's after-every-tic render
+            // visibility; reproduce it here (see demorec's determinism notes).
+            if self.attract_windowed {
+                self.mark_visibility();
+            }
+        }
+    }
+
+    /// Run a render purely for its FL_VISABLE side effect (into a reused scratch
+    /// framebuffer). Renders recompute the flags from scratch, so a later
+    /// on-screen render of the same state is idempotent.
+    fn mark_visibility(&mut self) {
+        let mut fb = self.attract_fb.take().unwrap_or_else(Framebuffer::new);
+        self.render_world(&mut fb);
+        self.attract_fb = Some(fb);
+    }
+
+    /// Set up and enter demo `demo` for attract playback: rebuild the world,
+    /// actors and player start from the recorded header, then replay its inputs.
+    pub fn start_attract_demo(&mut self, demo: &Demo) {
+        self.difficulty = Difficulty::from_index(demo.difficulty as usize);
+        self.level_idx = demo.level_idx.min(self.maps.num_levels() - 1);
+        self.reset_episode_stats();
+        self.load_level();
+        // Restore the recorded starting camera, loadout and RNG so the replay is
+        // bit-identical to the recording.
+        self.player.x = demo.player_x;
+        self.player.y = demo.player_y;
+        self.player.angle = demo.player_angle;
+        self.health = demo.health;
+        self.ammo = demo.ammo;
+        self.weapon = demo.weapon;
+        self.keys = demo.keys;
+        self.god = demo.god;
+        self.score = 0;
+        self.lives = 3;
+        self.died = false;
+        self.victory = false;
+        self.actors.set_rng_index(demo.rng_index);
+        self.actors.set_snd_rng_index(demo.snd_rng_index);
+        self.attract_tics = demo.tics.clone();
+        self.attract_cursor = 0;
+        self.attract_accum = 0.0;
+        self.attract_windowed = demo.windowed;
+        self.screen = GameScreen::Attract;
+        // A windowed recording began right after the level loaded and rendered a
+        // frame before its first recorded tic; reproduce that initial marking.
+        if self.attract_windowed {
+            self.mark_visibility();
+        }
+    }
+
+    /// The active demo finished (or its run ended the floor): advance to the next
+    /// demo and loop back to the title, restarting the attract cycle.
+    fn finish_attract_demo(&mut self) {
+        self.god = false;
+        if !self.demos.is_empty() {
+            self.attract_demo_idx = (self.attract_demo_idx + 1) % self.demos.len();
+        }
+        self.to_title();
     }
 
     /// Whether main-menu item `i` is selectable. Save Game is only available
@@ -897,8 +1105,13 @@ impl Game {
             self.main_sel = self.move_selectable(self.main_sel, 1);
         }
         if input.menu_back {
-            // Back out of the menu: resume a game in progress, else to title.
-            self.screen = if self.started { GameScreen::Playing } else { GameScreen::Title };
+            // Back out of the menu: resume a game in progress, else back to the
+            // title / attract loop (the original's "back to demo" fallthrough).
+            if self.started {
+                self.screen = GameScreen::Playing;
+            } else {
+                self.to_title();
+            }
             return;
         }
         if input.menu_enter {
@@ -934,6 +1147,7 @@ impl Game {
                     self.hs_edit_slot = None;
                     self.screen = GameScreen::HighScores;
                 }
+                menu::ITEM_BACKTODEMO => self.to_title(),
                 menu::ITEM_QUIT => self.should_quit = true,
                 _ => {}
             }
@@ -1608,6 +1822,29 @@ impl Game {
         match self.screen {
             GameScreen::Title => {
                 self.menu.render_title(fb);
+                return;
+            }
+            GameScreen::Credits => {
+                self.menu.render_credits(fb);
+                return;
+            }
+            GameScreen::Attract => {
+                if self.attract_windowed {
+                    // A windowed demo already re-marks visibility every tic
+                    // (update_attract); this frame render recomputes the same
+                    // flags from the same state, so it is idempotent.
+                    self.render_world(fb);
+                } else {
+                    // Headless recording: wrap the render so its FL_VISABLE
+                    // marking never leaks into the replayed simulation
+                    // (rendering marks actors visible, which feeds enemy
+                    // accuracy). The recording never rendered — `visible` was
+                    // false all run — so restoring keeps playback bit-identical.
+                    let saved = self.actors.save_visible();
+                    self.render_world(fb);
+                    self.actors.restore_visible(&saved);
+                }
+                self.menu.draw_demo_label(fb);
                 return;
             }
             GameScreen::MainMenu => {

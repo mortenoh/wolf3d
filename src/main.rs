@@ -6,8 +6,11 @@
 use wolf3d::{config, demo, fb, game, sound};
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
+
+use wolf3d::demorec::Demo;
 
 use wolf3d::assets::audio::AudioData;
 use wolf3d::sound::{Backend, SoundAssets};
@@ -264,6 +267,15 @@ struct App {
     applied_music_on: bool,
     /// The persistent options last written to disk (re-write only on change).
     applied_config: config::Config,
+    /// `WOLF3D_RECORD=path`: write the next play session (level start until
+    /// death / level exit / Esc) as an attract demo to this path. Taken (set to
+    /// None) once the recording has been written.
+    record_path: Option<PathBuf>,
+    /// The recording being captured, once a play session has started.
+    recording: Option<Demo>,
+    /// Fixed-timestep accumulator used while a recording is armed (recordings
+    /// must advance in whole 70 Hz tics to be replayable).
+    tic_accum: f32,
     keys: HashSet<KeyCode>,
     use_pressed: bool,
     weapon_pressed: Option<u8>,
@@ -291,7 +303,7 @@ struct App {
 }
 
 impl App {
-    fn new(game: Game, sound: Option<Backend>) -> Self {
+    fn new(game: Game, sound: Option<Backend>, record_path: Option<PathBuf>) -> Self {
         let (sfx_mode, music_on) = (game.sfx_mode, game.music_on);
         let applied_config = game.config_snapshot();
         Self {
@@ -304,6 +316,9 @@ impl App {
             applied_sfx_mode: sfx_mode,
             applied_music_on: music_on,
             applied_config,
+            record_path,
+            recording: None,
+            tic_accum: 0.0,
             keys: HashSet::new(),
             use_pressed: false,
             weapon_pressed: None,
@@ -401,9 +416,73 @@ impl App {
             typed: std::mem::take(&mut self.typed),
             backspace: std::mem::take(&mut self.backspace),
         };
-        self.game.update(dt, &input);
+        if self.record_path.is_some() {
+            self.update_recording(dt, input);
+        } else {
+            self.game.update(dt, &input);
+        }
         self.sync_audio();
         self.persist_config();
+    }
+
+    /// Fixed-timestep update used while `WOLF3D_RECORD` is armed: the game
+    /// advances in whole 70 Hz tics, the play session's inputs are captured one
+    /// per tic, and a visibility-marking render runs after every play tic so the
+    /// recording's render side effects are embedded at tic granularity (see
+    /// `demorec`'s determinism notes). The demo is written when the session ends
+    /// (death / level exit / Esc back to the menu).
+    fn update_recording(&mut self, dt: f32, mut input: Input) {
+        // Cap the backlog so a stall can't spiral into a huge catch-up burst.
+        self.tic_accum = (self.tic_accum + dt).min(0.25);
+        while self.tic_accum >= game::TIC {
+            self.tic_accum -= game::TIC;
+            if let Some(d) = &mut self.recording {
+                d.push(&input);
+            }
+            self.game.update(game::TIC, &input);
+
+            if self.game.screen == GameScreen::Playing {
+                if self.recording.is_none() {
+                    // The play session just started: capture the header at the
+                    // fresh level state, before any recorded tic.
+                    let mut d = Demo::begin(&self.game);
+                    d.windowed = true;
+                    self.recording = Some(d);
+                    println!("WOLF3D_RECORD: recording started");
+                }
+                // Embed this tic's render-visibility marking (playback re-runs
+                // the same marking render after every tic).
+                self.game.render(&mut self.fb);
+            } else if let Some(d) = self.recording.take() {
+                // The session ended (death / level exit / Esc): write the demo.
+                let path = self.record_path.take().expect("record path present");
+                match d.write_to(&path) {
+                    Ok(()) => {
+                        println!("WOLF3D_RECORD: wrote {} ({} tics)", path.display(), d.tics.len())
+                    }
+                    Err(e) => eprintln!("WOLF3D_RECORD: failed to write demo: {e}"),
+                }
+                return;
+            }
+
+            // Edge-triggered fields fire on the first tic of the frame only;
+            // held keys persist across the frame's remaining tics.
+            input = Input {
+                use_door: false,
+                select_weapon: None,
+                turn_delta: 0.0,
+                menu_up: false,
+                menu_down: false,
+                menu_left: false,
+                menu_right: false,
+                menu_enter: false,
+                menu_back: false,
+                any_key: false,
+                typed: None,
+                backspace: false,
+                ..input
+            };
+        }
     }
 
     /// Write the persistent options (view size, sound, music, mouse sensitivity)
@@ -448,8 +527,9 @@ impl App {
         // Title is silent; the menus share the menu song; play the level song
         // while playing.
         let desired = match screen {
-            GameScreen::Title => None,
+            GameScreen::Title | GameScreen::Credits => None,
             GameScreen::Playing
+            | GameScreen::Attract
             | GameScreen::GetPsyched
             | GameScreen::Death
             | GameScreen::DeathCam => Some(sound::song_for_level(level)),
@@ -712,6 +792,12 @@ fn main() {
         game.to_title();
     }
 
+    // The attract loop's recorded demos (demos/*.dm); missing demos just skip
+    // the demo stage of the title cycle. Loaded for the headless path too, so
+    // scripts can exercise the attract loop; game.demos has no effect on the
+    // simulation until a demo is actually played.
+    game.load_attract_demos();
+
     // WOLF3D_DEMO="w:1;use;wait:1;snap:door" plays scripted input headless
     // (no window) and writes framebuffer snapshots; see src/demo.rs.
     if let Some(script) = demo_script {
@@ -725,6 +811,11 @@ fn main() {
     if let Some(cfg) = config::load() {
         game.apply_config(&cfg);
     }
+
+    // WOLF3D_RECORD=path: capture the next play session (level start until
+    // death / level exit / Esc) as an attract demo. Recorded sessions run at a
+    // fixed 70 Hz timestep and embed render-visibility effects per tic.
+    let record_path = std::env::var("WOLF3D_RECORD").ok().map(PathBuf::from);
 
     // Open the audio device for the windowed path. Any failure (no device, no
     // sound data) is non-fatal: the game just runs silent.
@@ -747,5 +838,5 @@ fn main() {
 
     let event_loop = EventLoop::new().expect("event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop.run_app(&mut App::new(game, sound)).expect("run");
+    event_loop.run_app(&mut App::new(game, sound, record_path)).expect("run");
 }

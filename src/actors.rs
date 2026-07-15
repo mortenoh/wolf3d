@@ -943,6 +943,27 @@ impl Actors {
         }
     }
 
+    /// The current gameplay RNG index (US_RndT position). Captured into a demo
+    /// recording's header so replay starts from the same random stream.
+    pub fn rng_index(&self) -> usize {
+        self.rnd.index
+    }
+
+    /// The current sound RNG index (the cosmetic death-scream stream).
+    pub fn snd_rng_index(&self) -> usize {
+        self.snd_rnd.index
+    }
+
+    /// Seed the gameplay RNG index (demo playback: restore the recorded start).
+    pub fn set_rng_index(&mut self, index: usize) {
+        self.rnd.index = index & 0xff;
+    }
+
+    /// Seed the sound RNG index (demo playback: restore the recorded start).
+    pub fn set_snd_rng_index(&mut self, index: usize) {
+        self.snd_rnd.index = index & 0xff;
+    }
+
     /// Drain the enemy drops accumulated since the last call.
     pub fn take_drops(&mut self) -> Vec<(i32, i32, Bonus)> {
         std::mem::take(&mut self.drops)

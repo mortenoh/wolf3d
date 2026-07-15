@@ -11,7 +11,8 @@
 
 use crate::assets::vgagraph::{
     Picture, C_BABYMODEPIC, C_CURSOR1PIC, C_CURSOR2PIC, C_EPISODE1PIC, C_FXTITLEPIC, C_LOADGAMEPIC,
-    C_MUSICTITLEPIC, C_NOTSELECTEDPIC, C_OPTIONSPIC, C_SAVEGAMEPIC, C_SELECTEDPIC, TITLEPIC,
+    C_MUSICTITLEPIC, C_NOTSELECTEDPIC, C_OPTIONSPIC, C_SAVEGAMEPIC, C_SELECTEDPIC, CREDITSPIC,
+    TITLEPIC,
 };
 use crate::assets::VgaGraph;
 use crate::fb::{Framebuffer, HEIGHT, WIDTH};
@@ -72,7 +73,8 @@ pub const MAIN_ITEMS: [MenuItem; 10] = [
     MenuItem { label: "Change View", active: true },
     MenuItem { label: "Read This!", active: true },
     MenuItem { label: "View Scores", active: true },
-    MenuItem { label: "Back to Demo", active: false },
+    // Returns to the title / attract loop (WL_MENU.C "Back to Demo").
+    MenuItem { label: "Back to Demo", active: true },
     MenuItem { label: "Quit", active: true },
 ];
 /// Indices of the wired main-menu entries for the game state machine.
@@ -84,6 +86,7 @@ pub const ITEM_SAVE: usize = 4;
 pub const ITEM_CHANGEVIEW: usize = 5;
 pub const ITEM_READ: usize = 6;
 pub const ITEM_VIEWSCORES: usize = 7;
+pub const ITEM_BACKTODEMO: usize = 8;
 pub const ITEM_QUIT: usize = 9;
 
 pub const NUM_EPISODES: usize = 6;
@@ -122,6 +125,8 @@ pub struct Menu {
     sound_titles: [Picture; 2],
     /// Load / Save header art: [load, save].
     ls_titles: [Picture; 2],
+    /// The attract-loop credits page (CREDITSPIC).
+    credits: Picture,
     /// Cursor animation clock, in seconds.
     blink: f32,
 }
@@ -138,6 +143,7 @@ impl Menu {
             radio: [vga.pic(C_NOTSELECTEDPIC), vga.pic(C_SELECTEDPIC)],
             sound_titles: [vga.pic(C_FXTITLEPIC), vga.pic(C_MUSICTITLEPIC)],
             ls_titles: [vga.pic(C_LOADGAMEPIC), vga.pic(C_SAVEGAMEPIC)],
+            credits: vga.pic(CREDITSPIC),
             blink: 0.0,
         }
     }
@@ -158,6 +164,21 @@ impl Menu {
     /// TITLEPIC, full screen.
     pub fn render_title(&self, fb: &mut Framebuffer) {
         blit(fb, &self.title, 0, 0);
+    }
+
+    /// CREDITSPIC, full screen (the attract-loop credits page).
+    pub fn render_credits(&self, fb: &mut Framebuffer) {
+        blit(fb, &self.credits, 0, 0);
+    }
+
+    /// The flashing "DEMO" tag drawn in a corner during attract playback
+    /// (WL_PLAY.C PlayDemo shows "DEMO" over the recorded run). `blink` drives a
+    /// slow pulse between the two grey shades.
+    pub fn draw_demo_label(&self, fb: &mut Framebuffer) {
+        let color = if self.blink < 0.5 { HIGHLIGHT } else { TEXTCOLOR };
+        // Shadowed, near the top-left corner of the 3D view.
+        self.font.draw(fb, 9, 5, "DEMO", 0);
+        self.font.draw(fb, 8, 4, "DEMO", color);
     }
 
     /// The main menu: red backdrop, Options header, the item window and the

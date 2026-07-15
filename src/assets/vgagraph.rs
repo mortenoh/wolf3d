@@ -65,6 +65,10 @@ pub const STATUSBARPIC: usize = 86;
 /// The game's title screen (shown before the menu).
 pub const TITLEPIC: usize = 87;
 
+/// The credits page (GFXV_WL6.H CREDITSPIC), shown in the attract loop between
+/// the title and the high-score board.
+pub const CREDITSPIC: usize = 89;
+
 // Weapon icons on the status bar (KNIFEPIC + weapon), unused for now but kept
 // for reference alongside the VSWAP weapon-overlay sprites.
 pub const KNIFEPIC: usize = 91;
