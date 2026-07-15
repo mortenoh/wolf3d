@@ -1,0 +1,14 @@
+[package]
+name = "wolf3d"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = "1.25.1"
+pollster = "1.0.1"
+wgpu = "30.0.0"
+winit = "0.30.13"
+
+# Software rendering needs the optimizer even in dev builds.
+[profile.dev]
+opt-level = 2
