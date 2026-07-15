@@ -6,7 +6,9 @@
 //! (c) the elevator-through-intermission flow lives in tests/progression.rs.
 
 use wolf3d::game::{Game, Input};
-use wolf3d::inter::{compute_bonus, par_seconds, par_string, LevelStats, PAR_AMOUNT, PERCENT100AMT};
+use wolf3d::inter::{
+    LevelStats, PAR_AMOUNT, PERCENT100AMT, compute_bonus, par_seconds, par_string,
+};
 
 const DT: f32 = 1.0 / 70.0;
 const N: usize = 64; // MAP_SIZE
@@ -43,10 +45,10 @@ struct PushSetup {
 fn find_pushwall(game: &Game) -> PushSetup {
     use std::f32::consts::{FRAC_PI_2, PI};
     let dirs = [
-        (1i32, 0i32, 0.0f32),      // east
-        (-1, 0, PI),               // west
-        (0, 1, FRAC_PI_2),         // south
-        (0, -1, -FRAC_PI_2),       // north
+        (1i32, 0i32, 0.0f32), // east
+        (-1, 0, PI),          // west
+        (0, 1, FRAC_PI_2),    // south
+        (0, -1, -FRAC_PI_2),  // north
     ];
     for level in 0..game.maps.num_levels() {
         let lvl = game.maps.level(level);
@@ -102,12 +104,27 @@ fn pushwall_slides_two_tiles_and_reveals_secret() {
     game.player.angle = s.angle;
 
     let secrets_before = game.stats.secrets;
-    assert!(is_wall(game.world.level.plane0[s.wy as usize * N + s.wx as usize]));
+    assert!(is_wall(
+        game.world.level.plane0[s.wy as usize * N + s.wx as usize]
+    ));
 
     // Use the wall: it activates and the secret counter ticks.
-    game.update(DT, &Input { use_door: true, ..Default::default() });
-    assert!(game.world.pushwall.is_some(), "the push-wall started moving");
-    assert_eq!(game.stats.secrets, secrets_before + 1, "secret counter increments on activation");
+    game.update(
+        DT,
+        &Input {
+            use_door: true,
+            ..Default::default()
+        },
+    );
+    assert!(
+        game.world.pushwall.is_some(),
+        "the push-wall started moving"
+    );
+    assert_eq!(
+        game.stats.secrets,
+        secrets_before + 1,
+        "secret counter increments on activation"
+    );
 
     // Mid-slide: the wall renders offset (asserted via world state, not pixels).
     hold(&mut game, 0.5);
@@ -119,14 +136,24 @@ fn pushwall_slides_two_tiles_and_reveals_secret() {
 
     // Let the whole slide finish (two tiles at 128 tics each, ~3.7s).
     hold(&mut game, 5.0);
-    assert!(game.world.pushwall.is_none(), "the push-wall stops after two tiles");
+    assert!(
+        game.world.pushwall.is_none(),
+        "the push-wall stops after two tiles"
+    );
 
     // The two tiles it vacated are now passable; the tile it moved to is solid.
     let vacated0 = game.world.level.plane0[s.wy as usize * N + s.wx as usize];
     let vacated1 = game.world.level.plane0[(s.wy + s.dy) as usize * N + (s.wx + s.dx) as usize];
-    let landed = game.world.level.plane0[(s.wy + 2 * s.dy) as usize * N + (s.wx + 2 * s.dx) as usize];
-    assert!(walkable(vacated0), "the origin tile opened into passable floor");
-    assert!(walkable(vacated1), "the second tile opened into passable floor");
+    let landed =
+        game.world.level.plane0[(s.wy + 2 * s.dy) as usize * N + (s.wx + 2 * s.dx) as usize];
+    assert!(
+        walkable(vacated0),
+        "the origin tile opened into passable floor"
+    );
+    assert!(
+        walkable(vacated1),
+        "the second tile opened into passable floor"
+    );
     assert!(is_wall(landed), "the wall now rests two tiles back");
 }
 
@@ -170,7 +197,10 @@ fn intermission_bonus_matches_wl_inter_formulas() {
     assert_eq!(compute_bonus(10, 0, 50, 50, 50), (0, 0));
 
     // A zero total reads as 0%, not 100% (WL_INTER.C guards each total).
-    let empty = LevelStats { kill_total: 0, ..Default::default() };
+    let empty = LevelStats {
+        kill_total: 0,
+        ..Default::default()
+    };
     assert_eq!(empty.kill_ratio(), 0);
     assert_eq!(empty.treasure_ratio(), 0);
 
@@ -186,7 +216,12 @@ fn intermission_bonus_matches_wl_inter_formulas() {
 fn find_elevator(game: &Game) -> (f32, f32, f32) {
     use std::f32::consts::{FRAC_PI_2, PI};
     let lvl = game.maps.level(game.level_idx);
-    let dirs = [(1i32, 0i32, PI), (-1, 0, 0.0), (0, 1, -FRAC_PI_2), (0, -1, FRAC_PI_2)];
+    let dirs = [
+        (1i32, 0i32, PI),
+        (-1, 0, 0.0),
+        (0, 1, -FRAC_PI_2),
+        (0, -1, FRAC_PI_2),
+    ];
     for y in 1..N as i32 - 1 {
         for x in 1..N as i32 - 1 {
             if lvl.plane0[y as usize * N + x as usize] != 21 {
@@ -228,7 +263,13 @@ fn generate_snapshots() {
     g.player.angle = s.angle;
     g.render(&mut fb);
     write_ppm(&fb, &format!("{out}/secret_before.ppm"));
-    g.update(DT, &Input { use_door: true, ..Default::default() });
+    g.update(
+        DT,
+        &Input {
+            use_door: true,
+            ..Default::default()
+        },
+    );
     hold(&mut g, 0.9); // ~half a tile in
     g.render(&mut fb);
     write_ppm(&fb, &format!("{out}/pushwall_midslide.ppm"));
@@ -248,7 +289,13 @@ fn generate_snapshots() {
     g.stats.secrets = g.stats.secret_total;
     g.stats.treasure = (g.stats.treasure_total * 3 / 4).max(0);
     g.stats.time = 42.0;
-    g.update(DT, &Input { use_door: true, ..Default::default() });
+    g.update(
+        DT,
+        &Input {
+            use_door: true,
+            ..Default::default()
+        },
+    );
     assert_eq!(g.screen, wolf3d::game::GameScreen::Intermission);
     hold(&mut g, 0.6);
     g.render(&mut fb);
@@ -259,7 +306,13 @@ fn generate_snapshots() {
 
     // 3. The "Get Psyched!" load screen (force it on; demos skip it).
     g.show_load_screen = true;
-    g.update(DT, &Input { any_key: true, ..Default::default() });
+    g.update(
+        DT,
+        &Input {
+            any_key: true,
+            ..Default::default()
+        },
+    );
     assert_eq!(g.screen, wolf3d::game::GameScreen::GetPsyched);
     g.render(&mut fb);
     write_ppm(&fb, &format!("{out}/get_psyched.ppm"));

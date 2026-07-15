@@ -123,7 +123,9 @@ impl Door {
                 self.position += dt / DOOR_OPEN_TIME;
                 if self.position >= 1.0 {
                     self.position = 1.0;
-                    self.state = DoorState::Open { hold: DOOR_HOLD_TIME };
+                    self.state = DoorState::Open {
+                        hold: DOOR_HOLD_TIME,
+                    };
                 }
                 None
             }
@@ -550,7 +552,13 @@ impl World {
             let sprite = r.get_u32()? as usize;
             let bonus = Bonus::from_tag(r.get_u8()?)?;
             let picked = r.get_bool()?;
-            self.statics.push(StaticSprite { x, y, sprite, bonus, picked });
+            self.statics.push(StaticSprite {
+                x,
+                y,
+                sprite,
+                bonus,
+                picked,
+            });
         }
         for b in self.blocked.iter_mut() {
             *b = r.get_bool()?;
@@ -715,7 +723,14 @@ impl World {
         // solid, and start the slide with pwallstate = 1.
         self.level.plane1[idx] = 0;
         self.level.plane0[ay as usize * MAP_SIZE + ax as usize] = tex;
-        self.pushwall = Some(PushWall { x: tx, y: ty, dx, dy, tex, state: 1.0 });
+        self.pushwall = Some(PushWall {
+            x: tx,
+            y: ty,
+            dx,
+            dy,
+            tex,
+            state: 1.0,
+        });
         self.sounds.push(crate::sound::PUSHWALLSND as u8);
         PushUse::Activated
     }
@@ -742,7 +757,9 @@ impl World {
                 _ => DoorState::Closing,
             };
             let snd = match (d.state, new) {
-                (DoorState::Closed | DoorState::Closing, DoorState::Opening) => Some(crate::sound::OPENDOORSND as u8),
+                (DoorState::Closed | DoorState::Closing, DoorState::Opening) => {
+                    Some(crate::sound::OPENDOORSND as u8)
+                }
                 (_, DoorState::Closing) => Some(crate::sound::CLOSEDOORSND as u8),
                 _ => None,
             };
@@ -840,7 +857,11 @@ pub fn find_spawn(level: &Level) -> Player {
                     21 => FRAC_PI_2,  // south
                     _ => PI,          // west
                 };
-                return Player { x: x as f32 + 0.5, y: y as f32 + 0.5, angle };
+                return Player {
+                    x: x as f32 + 0.5,
+                    y: y as f32 + 0.5,
+                    angle,
+                };
             }
         }
     }
@@ -909,8 +930,16 @@ fn cast(world: &World, vswap: &VSwap, px: f32, py: f32, ray_x: f32, ray_y: f32) 
     let level = &world.level;
     let mut map_x = px.floor() as i32;
     let mut map_y = py.floor() as i32;
-    let delta_x = if ray_x == 0.0 { f32::MAX } else { (1.0 / ray_x).abs() };
-    let delta_y = if ray_y == 0.0 { f32::MAX } else { (1.0 / ray_y).abs() };
+    let delta_x = if ray_x == 0.0 {
+        f32::MAX
+    } else {
+        (1.0 / ray_x).abs()
+    };
+    let delta_y = if ray_y == 0.0 {
+        f32::MAX
+    } else {
+        (1.0 / ray_y).abs()
+    };
     let (step_x, mut side_x) = if ray_x < 0.0 {
         (-1, (px - map_x as f32) * delta_x)
     } else {
@@ -958,9 +987,7 @@ fn cast(world: &World, vswap: &VSwap, px: f32, py: f32, ray_x: f32, ray_y: f32) 
                 if (0.0..1.0).contains(&along) && u > 0.0 {
                     return Hit {
                         perp: slab.max(1e-4),
-                        texture: vswap.door_texture()
-                            + door.tex_base
-                            + door.vertical as usize,
+                        texture: vswap.door_texture() + door.tex_base + door.vertical as usize,
                         tex_u: (u * TEX_SIZE as f32) as usize & (TEX_SIZE - 1),
                     };
                 }
@@ -989,7 +1016,11 @@ fn cast(world: &World, vswap: &VSwap, px: f32, py: f32, ray_x: f32, ray_y: f32) 
         if is_wall(t) {
             let perp = enter.max(1e-4);
             // Fractional hit position along the wall = texture u.
-            let wall_x = if side_ns { px + perp * ray_x } else { py + perp * ray_y };
+            let wall_x = if side_ns {
+                px + perp * ray_x
+            } else {
+                py + perp * ray_y
+            };
             let wall_frac = wall_x - wall_x.floor();
             let mut tex_u = (wall_frac * TEX_SIZE as f32) as usize & (TEX_SIZE - 1);
             // Mirror so textures read left-to-right on the faces we approach.
@@ -1003,7 +1034,11 @@ fn cast(world: &World, vswap: &VSwap, px: f32, py: f32, ray_x: f32, ray_y: f32) 
             } else {
                 (t as usize - 1) * 2 + !side_ns as usize
             };
-            return Hit { perp, texture, tex_u };
+            return Hit {
+                perp,
+                texture,
+                tex_u,
+            };
         }
         prev_door = false;
     }
@@ -1055,7 +1090,11 @@ fn pushwall_slab_hit(
         tex_u = TEX_SIZE - 1 - tex_u;
     }
     let texture = (pw.tex as usize - 1) * 2 + !side_ns as usize;
-    Some(Hit { perp: slab_t.max(1e-4), texture, tex_u })
+    Some(Hit {
+        perp: slab_t.max(1e-4),
+        texture,
+        tex_u,
+    })
 }
 
 /// The grey palette bytes of the beveled 3D-view border (WL_MAIN.C
@@ -1193,7 +1232,14 @@ pub fn render(
         .statics
         .iter()
         .filter(|s| !s.picked)
-        .map(|s| ((s.x - p.x).powi(2) + (s.y - p.y).powi(2), s.x, s.y, s.sprite))
+        .map(|s| {
+            (
+                (s.x - p.x).powi(2) + (s.y - p.y).powi(2),
+                s.x,
+                s.y,
+                s.sprite,
+            )
+        })
         .collect();
     for i in 0..actors.list.len() {
         let (ax, ay) = (actors.list[i].x, actors.list[i].y);
@@ -1202,7 +1248,12 @@ pub fn render(
     }
     for pr in &actors.projectiles {
         let sprite = pr.sprite(p.x, p.y);
-        order.push(((pr.x - p.x).powi(2) + (pr.y - p.y).powi(2), pr.x, pr.y, sprite));
+        order.push((
+            (pr.x - p.x).powi(2) + (pr.y - p.y).powi(2),
+            pr.x,
+            pr.y,
+            sprite,
+        ));
     }
     order.sort_by(|a, b| b.0.total_cmp(&a.0));
 

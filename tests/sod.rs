@@ -8,7 +8,7 @@
 //! original US_RndT table.
 
 use wolf3d::actors::Kind;
-use wolf3d::assets::{data_dir, MapSet, VSwap, VgaGraph};
+use wolf3d::assets::{MapSet, VSwap, VgaGraph, data_dir};
 use wolf3d::game::{Game, Input, WEAPON_CHAINGUN};
 use wolf3d::variant::Variant;
 
@@ -71,7 +71,11 @@ fn sod_assets_decode() {
     let vswap = VSwap::load_ext(&data_dir(), "SOD").expect("VSWAP.SOD");
     // SOD sprites run through SPR_CHAINATK4; the four extra statics push the
     // count above WL6's. The last 20 sprites are the player weapon frames.
-    assert!(vswap.sprites.len() >= 380, "SOD sprite bank unexpectedly small: {}", vswap.sprites.len());
+    assert!(
+        vswap.sprites.len() >= 380,
+        "SOD sprite bank unexpectedly small: {}",
+        vswap.sprites.len()
+    );
     assert!(!vswap.walls.is_empty());
 
     let vga = VgaGraph::load_ext(&data_dir(), "SOD").expect("VGAGRAPH.SOD");
@@ -80,7 +84,11 @@ fn sod_assets_decode() {
     let bottom = vga.pic(80);
     assert_eq!(top.width, 320, "TITLE1PIC should be 320 wide");
     assert_eq!(bottom.width, 320, "TITLE2PIC should be 320 wide");
-    assert_eq!(top.height + bottom.height, 200, "the two title halves stack to 200 rows");
+    assert_eq!(
+        top.height + bottom.height,
+        200,
+        "the two title halves stack to 200 rows"
+    );
     // STATUSBARPIC (SOD chunk 90) is the 320x40 HUD bar.
     let bar = vga.pic(90);
     assert_eq!((bar.width, bar.height), (320, 40));
@@ -108,7 +116,11 @@ fn sod_bosses_spawn_on_their_floors() {
             "floor {idx} plane1 should hold spawn code {code} for {kind:?}"
         );
         let boss = game.actors.list.iter().find(|a| a.kind == kind);
-        assert!(boss.is_some(), "floor {idx} ({}) should spawn a {kind:?}", game.world.level.name);
+        assert!(
+            boss.is_some(),
+            "floor {idx} ({}) should spawn a {kind:?}",
+            game.world.level.name
+        );
         assert!(!boss.unwrap().dead);
     }
 }
@@ -132,7 +144,10 @@ fn sod_grabbing_the_spear_warps_to_the_angel_floor() {
         }
     }
     let (spear_floor, pos) = spear.expect("some SOD floor holds the spear (plane-1 code 74)");
-    assert!(spear_floor != 20, "the spear should not be on the Angel floor itself");
+    assert!(
+        spear_floor != 20,
+        "the spear should not be on the Angel floor itself"
+    );
 
     let mut game = sod_game(spear_floor);
     // Stand the player on the spear tile so the per-frame pickup test fires.
@@ -142,11 +157,24 @@ fn sod_grabbing_the_spear_warps_to_the_angel_floor() {
 
     game.update(DT, &Input::default());
 
-    assert_eq!(game.level_idx, 20, "grabbing the spear warps to the Angel floor (mapon 20)");
-    assert!(!game.spear_pending, "the spear warp should have been consumed");
-    assert_eq!(game.keys & wolf3d::hud::KEY_GOLD, wolf3d::hud::KEY_GOLD, "floor 20 always grants the gold key");
+    assert_eq!(
+        game.level_idx, 20,
+        "grabbing the spear warps to the Angel floor (mapon 20)"
+    );
+    assert!(
+        !game.spear_pending,
+        "the spear warp should have been consumed"
+    );
+    assert_eq!(
+        game.keys & wolf3d::hud::KEY_GOLD,
+        wolf3d::hud::KEY_GOLD,
+        "floor 20 always grants the gold key"
+    );
     // The Angel is waiting on the floor we warped to.
-    assert!(game.actors.list.iter().any(|a| a.kind == Kind::Angel), "the Angel of Death waits on floor 20");
+    assert!(
+        game.actors.list.iter().any(|a| a.kind == Kind::Angel),
+        "the Angel of Death waits on floor 20"
+    );
 }
 
 /// Killing the Angel of Death on the final floor sets the victory flag
@@ -190,11 +218,20 @@ fn sod_killing_the_angel_wins() {
             game.player.angle = dy.atan2(dx);
         }
         game.ammo = 99;
-        game.update(DT, &Input { fire: true, ..Default::default() });
+        game.update(
+            DT,
+            &Input {
+                fire: true,
+                ..Default::default()
+            },
+        );
         if game.victory {
             won = true;
             break;
         }
     }
-    assert!(won, "the Angel of Death should die and set the victory flag");
+    assert!(
+        won,
+        "the Angel of Death should die and set the victory flag"
+    );
 }

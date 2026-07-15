@@ -4,7 +4,7 @@
 //! versioned file next to the save slots (`highscores.bin`), written with the
 //! same [`crate::savegame`] `Writer`/`Reader` primitives.
 
-use crate::savegame::{saves_dir, Reader, SaveError, Writer};
+use crate::savegame::{Reader, SaveError, Writer, saves_dir};
 
 /// WL_DEF.H `MaxScores`: the board holds seven entries.
 pub const MAX_SCORES: usize = 7;
@@ -39,7 +39,11 @@ pub fn default_table() -> Vec<HighScore> {
     ];
     DEFAULTS
         .iter()
-        .map(|&(name, score, completed)| HighScore { name: name.to_string(), score, completed })
+        .map(|&(name, score, completed)| HighScore {
+            name: name.to_string(),
+            score,
+            completed,
+        })
         .collect()
 }
 
@@ -78,7 +82,11 @@ pub fn read_table(data: &[u8]) -> Result<Vec<HighScore>, SaveError> {
         let name = r.get_str()?;
         let score = r.get_i32()?;
         let completed = r.get_u32()?;
-        table.push(HighScore { name, score, completed });
+        table.push(HighScore {
+            name,
+            score,
+            completed,
+        });
     }
     Ok(table)
 }
@@ -108,7 +116,11 @@ fn normalize(table: &mut Vec<HighScore>) {
     table.sort_by(|a, b| b.score.cmp(&a.score).then(b.completed.cmp(&a.completed)));
     table.truncate(MAX_SCORES);
     while table.len() < MAX_SCORES {
-        table.push(HighScore { name: String::new(), score: 0, completed: 0 });
+        table.push(HighScore {
+            name: String::new(),
+            score: 0,
+            completed: 0,
+        });
     }
 }
 
@@ -116,7 +128,9 @@ fn normalize(table: &mut Vec<HighScore>) {
 /// does not beat the last place (WL_INTER.C `CheckHighScore` qualification: a
 /// strictly higher score, or an equal score reaching a further level).
 pub fn qualifying_slot(table: &[HighScore], score: i32, completed: u32) -> Option<usize> {
-    table.iter().position(|e| score > e.score || (score == e.score && completed > e.completed))
+    table
+        .iter()
+        .position(|e| score > e.score || (score == e.score && completed > e.completed))
 }
 
 /// Insert a run at its qualifying slot, shifting lower rows down and dropping
@@ -125,7 +139,14 @@ pub fn qualifying_slot(table: &[HighScore], score: i32, completed: u32) -> Optio
 /// the name-entry field to fill.
 pub fn insert(table: &mut Vec<HighScore>, score: i32, completed: u32) -> Option<usize> {
     let slot = qualifying_slot(table, score, completed)?;
-    table.insert(slot, HighScore { name: String::new(), score, completed });
+    table.insert(
+        slot,
+        HighScore {
+            name: String::new(),
+            score,
+            completed,
+        },
+    );
     table.truncate(MAX_SCORES);
     Some(slot)
 }

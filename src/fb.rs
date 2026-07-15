@@ -16,6 +16,14 @@ pub struct Framebuffer {
     pub pixels: Vec<u32>,
 }
 
+/// A derived Default would make an EMPTY pixel buffer, which every consumer
+/// would index out of bounds — Default must mean a full black screen.
+impl Default for Framebuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Framebuffer {
     pub fn new() -> Self {
         Self {

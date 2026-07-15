@@ -69,7 +69,9 @@ const SOUTHEAST: u8 = 7;
 const NODIR: u8 = 8;
 
 /// opposite[9] from WL_STATE.C.
-const OPPOSITE: [u8; 9] = [WEST, SOUTHWEST, SOUTH, SOUTHEAST, EAST, NORTHEAST, NORTH, NORTHWEST, NODIR];
+const OPPOSITE: [u8; 9] = [
+    WEST, SOUTHWEST, SOUTH, SOUTHEAST, EAST, NORTHEAST, NORTH, NORTHWEST, NODIR,
+];
 
 /// Movement delta per direction, +x east / +y south (screen down).
 fn dir_delta(dir: u8) -> (i32, i32) {
@@ -323,7 +325,10 @@ impl Kind {
 
     /// A Spear-of-Destiny boss (reuses the WL6 boss machinery).
     pub fn is_sod_boss(self) -> bool {
-        matches!(self, Kind::Trans | Kind::Uber | Kind::Will | Kind::Death | Kind::Angel)
+        matches!(
+            self,
+            Kind::Trans | Kind::Uber | Kind::Will | Kind::Death | Kind::Angel
+        )
     }
     /// starthitpoints[gd_hard][kind] from WL_ACT2.C ("death incarnate" tier);
     /// the real Hitler uses A_HitlerMorph's own table {500,700,800,900}.
@@ -405,12 +410,12 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
     // entry indices. Shoot/die frame counts and tics differ per enemy, so they
     // are passed in.
     let push_humanoid = |v: &mut Vec<State>,
-                             stand: u16,
-                             w1: u16,
-                             pain1: u16,
-                             pain2: u16,
-                             shoots: &[(u16, u16, bool)],
-                             dies: &[(u16, u16)]|
+                         stand: u16,
+                         w1: u16,
+                         pain1: u16,
+                         pain2: u16,
+                         shoots: &[(u16, u16, bool)],
+                         dies: &[(u16, u16)]|
      -> KindStates {
         let (w2, w3, w4) = (w1 + 8, w1 + 16, w1 + 24);
         let b = v.len();
@@ -419,17 +424,80 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         let die0 = chase0 + 6;
 
         // stand (b+0)
-        v.push(State { sprite: stand, rotate: true, tics: 0, think: Think::Stand, action: Action::None, next: b });
+        v.push(State {
+            sprite: stand,
+            rotate: true,
+            tics: 0,
+            think: Think::Stand,
+            action: Action::None,
+            next: b,
+        });
         // path1..path4 (b+1..=b+6)
-        v.push(State { sprite: w1, rotate: true, tics: 20, think: Think::Path, action: Action::None, next: b + 2 });
-        v.push(State { sprite: w1, rotate: true, tics: 5, think: Think::None, action: Action::None, next: b + 3 });
-        v.push(State { sprite: w2, rotate: true, tics: 15, think: Think::Path, action: Action::None, next: b + 4 });
-        v.push(State { sprite: w3, rotate: true, tics: 20, think: Think::Path, action: Action::None, next: b + 5 });
-        v.push(State { sprite: w3, rotate: true, tics: 5, think: Think::None, action: Action::None, next: b + 6 });
-        v.push(State { sprite: w4, rotate: true, tics: 15, think: Think::Path, action: Action::None, next: b + 1 });
+        v.push(State {
+            sprite: w1,
+            rotate: true,
+            tics: 20,
+            think: Think::Path,
+            action: Action::None,
+            next: b + 2,
+        });
+        v.push(State {
+            sprite: w1,
+            rotate: true,
+            tics: 5,
+            think: Think::None,
+            action: Action::None,
+            next: b + 3,
+        });
+        v.push(State {
+            sprite: w2,
+            rotate: true,
+            tics: 15,
+            think: Think::Path,
+            action: Action::None,
+            next: b + 4,
+        });
+        v.push(State {
+            sprite: w3,
+            rotate: true,
+            tics: 20,
+            think: Think::Path,
+            action: Action::None,
+            next: b + 5,
+        });
+        v.push(State {
+            sprite: w3,
+            rotate: true,
+            tics: 5,
+            think: Think::None,
+            action: Action::None,
+            next: b + 6,
+        });
+        v.push(State {
+            sprite: w4,
+            rotate: true,
+            tics: 15,
+            think: Think::Path,
+            action: Action::None,
+            next: b + 1,
+        });
         // pain (b+7), pain1 (b+8)
-        v.push(State { sprite: pain1, rotate: false, tics: 10, think: Think::None, action: Action::None, next: chase0 });
-        v.push(State { sprite: pain2, rotate: false, tics: 10, think: Think::None, action: Action::None, next: chase0 });
+        v.push(State {
+            sprite: pain1,
+            rotate: false,
+            tics: 10,
+            think: Think::None,
+            action: Action::None,
+            next: chase0,
+        });
+        v.push(State {
+            sprite: pain2,
+            rotate: false,
+            tics: 10,
+            think: Think::None,
+            action: Action::None,
+            next: chase0,
+        });
         // shoots (b+9 ..)
         for (k, &(spr, tics, fire)) in shoots.iter().enumerate() {
             let next = if k + 1 < s { b + 9 + k + 1 } else { chase0 };
@@ -443,12 +511,54 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             });
         }
         // chase (chase0 ..)
-        v.push(State { sprite: w1, rotate: true, tics: 10, think: Think::Chase, action: Action::None, next: chase0 + 1 });
-        v.push(State { sprite: w1, rotate: true, tics: 3, think: Think::None, action: Action::None, next: chase0 + 2 });
-        v.push(State { sprite: w2, rotate: true, tics: 8, think: Think::Chase, action: Action::None, next: chase0 + 3 });
-        v.push(State { sprite: w3, rotate: true, tics: 10, think: Think::Chase, action: Action::None, next: chase0 + 4 });
-        v.push(State { sprite: w3, rotate: true, tics: 3, think: Think::None, action: Action::None, next: chase0 + 5 });
-        v.push(State { sprite: w4, rotate: true, tics: 8, think: Think::Chase, action: Action::None, next: chase0 });
+        v.push(State {
+            sprite: w1,
+            rotate: true,
+            tics: 10,
+            think: Think::Chase,
+            action: Action::None,
+            next: chase0 + 1,
+        });
+        v.push(State {
+            sprite: w1,
+            rotate: true,
+            tics: 3,
+            think: Think::None,
+            action: Action::None,
+            next: chase0 + 2,
+        });
+        v.push(State {
+            sprite: w2,
+            rotate: true,
+            tics: 8,
+            think: Think::Chase,
+            action: Action::None,
+            next: chase0 + 3,
+        });
+        v.push(State {
+            sprite: w3,
+            rotate: true,
+            tics: 10,
+            think: Think::Chase,
+            action: Action::None,
+            next: chase0 + 4,
+        });
+        v.push(State {
+            sprite: w3,
+            rotate: true,
+            tics: 3,
+            think: Think::None,
+            action: Action::None,
+            next: chase0 + 5,
+        });
+        v.push(State {
+            sprite: w4,
+            rotate: true,
+            tics: 8,
+            think: Think::Chase,
+            action: Action::None,
+            next: chase0,
+        });
         // dies (die0 ..); last has tics 0 and loops on itself
         let d = dies.len();
         for (k, &(spr, tics)) in dies.iter().enumerate() {
@@ -458,40 +568,95 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
                 rotate: false,
                 tics,
                 think: Think::None,
-                action: if k == 0 { Action::DeathScream } else { Action::None },
+                action: if k == 0 {
+                    Action::DeathScream
+                } else {
+                    Action::None
+                },
                 next,
             });
         }
 
-        KindStates { stand: b, path1: b + 1, chase1: chase0, attack1: b + 9, die1: die0, pain: b + 7, pain1: b + 8 }
+        KindStates {
+            stand: b,
+            path1: b + 1,
+            chase1: chase0,
+            attack1: b + 9,
+            die1: die0,
+            pain: b + 7,
+            pain1: b + 8,
+        }
     };
 
     // Guard, officer, ss, mutant (sprite bases from WL_DEF.H SPR_ enum, shifted
     // by `shift` for the SOD sprite layout).
     let f = shift;
     let guard = push_humanoid(
-        &mut v, 50 + f, 58 + f, 90 + f, 94 + f,
+        &mut v,
+        50 + f,
+        58 + f,
+        90 + f,
+        94 + f,
         &[(96 + f, 20, false), (97 + f, 20, true), (98 + f, 20, false)],
         &[(91 + f, 15), (92 + f, 15), (93 + f, 15), (95 + f, 0)],
     );
     let officer = push_humanoid(
-        &mut v, 238 + f, 246 + f, 278 + f, 282 + f,
-        &[(285 + f, 6, false), (286 + f, 20, true), (287 + f, 10, false)],
-        &[(279 + f, 11), (280 + f, 11), (281 + f, 11), (283 + f, 11), (284 + f, 0)],
+        &mut v,
+        238 + f,
+        246 + f,
+        278 + f,
+        282 + f,
+        &[
+            (285 + f, 6, false),
+            (286 + f, 20, true),
+            (287 + f, 10, false),
+        ],
+        &[
+            (279 + f, 11),
+            (280 + f, 11),
+            (281 + f, 11),
+            (283 + f, 11),
+            (284 + f, 0),
+        ],
     );
     let ss = push_humanoid(
-        &mut v, 138 + f, 146 + f, 178 + f, 182 + f,
+        &mut v,
+        138 + f,
+        146 + f,
+        178 + f,
+        182 + f,
         &[
-            (184 + f, 20, false), (185 + f, 20, true), (186 + f, 10, false), (185 + f, 10, true),
-            (186 + f, 10, false), (185 + f, 10, true), (186 + f, 10, false), (185 + f, 10, true),
+            (184 + f, 20, false),
+            (185 + f, 20, true),
+            (186 + f, 10, false),
+            (185 + f, 10, true),
+            (186 + f, 10, false),
+            (185 + f, 10, true),
+            (186 + f, 10, false),
+            (185 + f, 10, true),
             (186 + f, 10, false),
         ],
         &[(179 + f, 15), (180 + f, 15), (181 + f, 15), (183 + f, 0)],
     );
     let mutant = push_humanoid(
-        &mut v, 187 + f, 195 + f, 227 + f, 231 + f,
-        &[(234 + f, 6, true), (235 + f, 20, false), (236 + f, 10, true), (237 + f, 20, false)],
-        &[(228 + f, 7), (229 + f, 7), (230 + f, 7), (232 + f, 7), (233 + f, 0)],
+        &mut v,
+        187 + f,
+        195 + f,
+        227 + f,
+        231 + f,
+        &[
+            (234 + f, 6, true),
+            (235 + f, 20, false),
+            (236 + f, 10, true),
+            (237 + f, 20, false),
+        ],
+        &[
+            (228 + f, 7),
+            (229 + f, 7),
+            (230 + f, 7),
+            (232 + f, 7),
+            (233 + f, 0),
+        ],
     );
 
     // Dog — no shoot; a bite-jump attack and its own die chain (WL_ACT2.C).
@@ -500,35 +665,197 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         let b = v.len();
         // stand (b+0) — synthetic: SpawnStand(en_dog) is a no-op in the
         // original; a dog stand marker just yields a dog that notices and chases.
-        v.push(State { sprite: w1, rotate: true, tics: 0, think: Think::Stand, action: Action::None, next: b });
+        v.push(State {
+            sprite: w1,
+            rotate: true,
+            tics: 0,
+            think: Think::Stand,
+            action: Action::None,
+            next: b,
+        });
         // path1..path4 (b+1..=b+6)
-        v.push(State { sprite: w1, rotate: true, tics: 20, think: Think::Path, action: Action::None, next: b + 2 });
-        v.push(State { sprite: w1, rotate: true, tics: 5, think: Think::None, action: Action::None, next: b + 3 });
-        v.push(State { sprite: w2, rotate: true, tics: 15, think: Think::Path, action: Action::None, next: b + 4 });
-        v.push(State { sprite: w3, rotate: true, tics: 20, think: Think::Path, action: Action::None, next: b + 5 });
-        v.push(State { sprite: w3, rotate: true, tics: 5, think: Think::None, action: Action::None, next: b + 6 });
-        v.push(State { sprite: w4, rotate: true, tics: 15, think: Think::Path, action: Action::None, next: b + 1 });
+        v.push(State {
+            sprite: w1,
+            rotate: true,
+            tics: 20,
+            think: Think::Path,
+            action: Action::None,
+            next: b + 2,
+        });
+        v.push(State {
+            sprite: w1,
+            rotate: true,
+            tics: 5,
+            think: Think::None,
+            action: Action::None,
+            next: b + 3,
+        });
+        v.push(State {
+            sprite: w2,
+            rotate: true,
+            tics: 15,
+            think: Think::Path,
+            action: Action::None,
+            next: b + 4,
+        });
+        v.push(State {
+            sprite: w3,
+            rotate: true,
+            tics: 20,
+            think: Think::Path,
+            action: Action::None,
+            next: b + 5,
+        });
+        v.push(State {
+            sprite: w3,
+            rotate: true,
+            tics: 5,
+            think: Think::None,
+            action: Action::None,
+            next: b + 6,
+        });
+        v.push(State {
+            sprite: w4,
+            rotate: true,
+            tics: 15,
+            think: Think::Path,
+            action: Action::None,
+            next: b + 1,
+        });
         // jump1..jump5 (b+7..=b+11)
         let chase0 = b + 12;
-        v.push(State { sprite: 135 + f, rotate: false, tics: 10, think: Think::None, action: Action::None, next: b + 8 });
-        v.push(State { sprite: 136 + f, rotate: false, tics: 10, think: Think::None, action: Action::Bite, next: b + 9 });
-        v.push(State { sprite: 137 + f, rotate: false, tics: 10, think: Think::None, action: Action::None, next: b + 10 });
-        v.push(State { sprite: 135 + f, rotate: false, tics: 10, think: Think::None, action: Action::None, next: b + 11 });
-        v.push(State { sprite: w1, rotate: false, tics: 10, think: Think::None, action: Action::None, next: chase0 });
+        v.push(State {
+            sprite: 135 + f,
+            rotate: false,
+            tics: 10,
+            think: Think::None,
+            action: Action::None,
+            next: b + 8,
+        });
+        v.push(State {
+            sprite: 136 + f,
+            rotate: false,
+            tics: 10,
+            think: Think::None,
+            action: Action::Bite,
+            next: b + 9,
+        });
+        v.push(State {
+            sprite: 137 + f,
+            rotate: false,
+            tics: 10,
+            think: Think::None,
+            action: Action::None,
+            next: b + 10,
+        });
+        v.push(State {
+            sprite: 135 + f,
+            rotate: false,
+            tics: 10,
+            think: Think::None,
+            action: Action::None,
+            next: b + 11,
+        });
+        v.push(State {
+            sprite: w1,
+            rotate: false,
+            tics: 10,
+            think: Think::None,
+            action: Action::None,
+            next: chase0,
+        });
         // chase1..chase4 (chase0..)
-        v.push(State { sprite: w1, rotate: true, tics: 10, think: Think::DogChase, action: Action::None, next: chase0 + 1 });
-        v.push(State { sprite: w1, rotate: true, tics: 3, think: Think::None, action: Action::None, next: chase0 + 2 });
-        v.push(State { sprite: w2, rotate: true, tics: 8, think: Think::DogChase, action: Action::None, next: chase0 + 3 });
-        v.push(State { sprite: w3, rotate: true, tics: 10, think: Think::DogChase, action: Action::None, next: chase0 + 4 });
-        v.push(State { sprite: w3, rotate: true, tics: 3, think: Think::None, action: Action::None, next: chase0 + 5 });
-        v.push(State { sprite: w4, rotate: true, tics: 8, think: Think::DogChase, action: Action::None, next: chase0 });
+        v.push(State {
+            sprite: w1,
+            rotate: true,
+            tics: 10,
+            think: Think::DogChase,
+            action: Action::None,
+            next: chase0 + 1,
+        });
+        v.push(State {
+            sprite: w1,
+            rotate: true,
+            tics: 3,
+            think: Think::None,
+            action: Action::None,
+            next: chase0 + 2,
+        });
+        v.push(State {
+            sprite: w2,
+            rotate: true,
+            tics: 8,
+            think: Think::DogChase,
+            action: Action::None,
+            next: chase0 + 3,
+        });
+        v.push(State {
+            sprite: w3,
+            rotate: true,
+            tics: 10,
+            think: Think::DogChase,
+            action: Action::None,
+            next: chase0 + 4,
+        });
+        v.push(State {
+            sprite: w3,
+            rotate: true,
+            tics: 3,
+            think: Think::None,
+            action: Action::None,
+            next: chase0 + 5,
+        });
+        v.push(State {
+            sprite: w4,
+            rotate: true,
+            tics: 8,
+            think: Think::DogChase,
+            action: Action::None,
+            next: chase0,
+        });
         // die1..dead (die0..)
         let die0 = chase0 + 6;
-        v.push(State { sprite: 131 + f, rotate: false, tics: 15, think: Think::None, action: Action::DeathScream, next: die0 + 1 });
-        v.push(State { sprite: 132 + f, rotate: false, tics: 15, think: Think::None, action: Action::None, next: die0 + 2 });
-        v.push(State { sprite: 133 + f, rotate: false, tics: 15, think: Think::None, action: Action::None, next: die0 + 3 });
-        v.push(State { sprite: 134 + f, rotate: false, tics: 15, think: Think::None, action: Action::None, next: die0 + 3 });
-        KindStates { stand: b, path1: b + 1, chase1: chase0, attack1: b + 7, die1: die0, pain: die0, pain1: die0 }
+        v.push(State {
+            sprite: 131 + f,
+            rotate: false,
+            tics: 15,
+            think: Think::None,
+            action: Action::DeathScream,
+            next: die0 + 1,
+        });
+        v.push(State {
+            sprite: 132 + f,
+            rotate: false,
+            tics: 15,
+            think: Think::None,
+            action: Action::None,
+            next: die0 + 2,
+        });
+        v.push(State {
+            sprite: 133 + f,
+            rotate: false,
+            tics: 15,
+            think: Think::None,
+            action: Action::None,
+            next: die0 + 3,
+        });
+        v.push(State {
+            sprite: 134 + f,
+            rotate: false,
+            tics: 15,
+            think: Think::None,
+            action: Action::None,
+            next: die0 + 3,
+        });
+        KindStates {
+            stand: b,
+            path1: b + 1,
+            chase1: chase0,
+            attack1: b + 7,
+            die1: die0,
+            pain: die0,
+            pain1: die0,
+        }
     };
 
     // Boss block (WL_ACT2.C): a stand state (unless spawned straight into
@@ -547,32 +874,103 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         let b = v.len();
         let chase0 = if stand { b + 1 } else { b };
         if stand {
-            v.push(State { sprite: w1, rotate: false, tics: 0, think: Think::Stand, action: Action::None, next: b });
+            v.push(State {
+                sprite: w1,
+                rotate: false,
+                tics: 0,
+                think: Think::Stand,
+                action: Action::None,
+                next: b,
+            });
         }
         // chase1, chase1s, chase2, chase3, chase3s, chase4.
         let (t1, ts, t2) = chase_tics;
-        v.push(State { sprite: w1, rotate: false, tics: t1, think: chase_think, action: Action::None, next: chase0 + 1 });
-        v.push(State { sprite: w1, rotate: false, tics: ts, think: Think::None, action: Action::None, next: chase0 + 2 });
-        v.push(State { sprite: w2, rotate: false, tics: t2, think: chase_think, action: Action::None, next: chase0 + 3 });
-        v.push(State { sprite: w3, rotate: false, tics: t1, think: chase_think, action: Action::None, next: chase0 + 4 });
-        v.push(State { sprite: w3, rotate: false, tics: ts, think: Think::None, action: Action::None, next: chase0 + 5 });
-        v.push(State { sprite: w4, rotate: false, tics: t2, think: chase_think, action: Action::None, next: chase0 });
+        v.push(State {
+            sprite: w1,
+            rotate: false,
+            tics: t1,
+            think: chase_think,
+            action: Action::None,
+            next: chase0 + 1,
+        });
+        v.push(State {
+            sprite: w1,
+            rotate: false,
+            tics: ts,
+            think: Think::None,
+            action: Action::None,
+            next: chase0 + 2,
+        });
+        v.push(State {
+            sprite: w2,
+            rotate: false,
+            tics: t2,
+            think: chase_think,
+            action: Action::None,
+            next: chase0 + 3,
+        });
+        v.push(State {
+            sprite: w3,
+            rotate: false,
+            tics: t1,
+            think: chase_think,
+            action: Action::None,
+            next: chase0 + 4,
+        });
+        v.push(State {
+            sprite: w3,
+            rotate: false,
+            tics: ts,
+            think: Think::None,
+            action: Action::None,
+            next: chase0 + 5,
+        });
+        v.push(State {
+            sprite: w4,
+            rotate: false,
+            tics: t2,
+            think: chase_think,
+            action: Action::None,
+            next: chase0,
+        });
         // shoots; the last always returns to chase1.
         let shoot0 = chase0 + 6;
         let s = shoots.len();
         for (k, &(spr, tics, action)) in shoots.iter().enumerate() {
             let next = if k + 1 < s { shoot0 + k + 1 } else { chase0 };
-            v.push(State { sprite: spr, rotate: false, tics, think: Think::None, action, next });
+            v.push(State {
+                sprite: spr,
+                rotate: false,
+                tics,
+                think: Think::None,
+                action,
+                next,
+            });
         }
         // dies; the last has tics 0 and loops on itself.
         let die0 = shoot0 + s;
         let d = dies.len();
         for (k, &(spr, tics, action)) in dies.iter().enumerate() {
             let next = if k + 1 < d { die0 + k + 1 } else { die0 + k };
-            v.push(State { sprite: spr, rotate: false, tics, think: Think::None, action, next });
+            v.push(State {
+                sprite: spr,
+                rotate: false,
+                tics,
+                think: Think::None,
+                action,
+                next,
+            });
         }
         let stand_idx = if stand { b } else { chase0 };
-        KindStates { stand: stand_idx, path1: stand_idx, chase1: chase0, attack1: shoot0, die1: die0, pain: chase0, pain1: chase0 }
+        KindStates {
+            stand: stand_idx,
+            path1: stand_idx,
+            chase1: chase0,
+            attack1: shoot0,
+            die1: die0,
+            pain: chase0,
+            pain1: chase0,
+        }
     };
 
     use Action as A;
@@ -581,8 +979,23 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
     // KindStates slot resolves to a valid state index.
     let placeholder = {
         let b = v.len();
-        v.push(State { sprite: 0, rotate: false, tics: 0, think: Think::None, action: A::None, next: b });
-        KindStates { stand: b, path1: b, chase1: b, attack1: b, die1: b, pain: b, pain1: b }
+        v.push(State {
+            sprite: 0,
+            rotate: false,
+            tics: 0,
+            think: Think::None,
+            action: A::None,
+            next: b,
+        });
+        KindStates {
+            stand: b,
+            path1: b,
+            chase1: b,
+            attack1: b,
+            die1: b,
+            pain: b,
+            pain1: b,
+        }
     };
 
     // Pac-Man ghosts (WL_ACT2.C s_blinkychase1 .. s_inkychase2): a bare 2-frame
@@ -590,9 +1003,31 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
     // T_Ghosts think.
     let push_ghost = |v: &mut Vec<State>, w1: u16| -> KindStates {
         let b = v.len();
-        v.push(State { sprite: w1, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b + 1 });
-        v.push(State { sprite: w1 + 1, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b });
-        KindStates { stand: b, path1: b, chase1: b, attack1: b, die1: b, pain: b, pain1: b }
+        v.push(State {
+            sprite: w1,
+            rotate: false,
+            tics: 10,
+            think: Think::GhostChase,
+            action: A::None,
+            next: b + 1,
+        });
+        v.push(State {
+            sprite: w1 + 1,
+            rotate: false,
+            tics: 10,
+            think: Think::GhostChase,
+            action: A::None,
+            next: b,
+        });
+        KindStates {
+            stand: b,
+            path1: b,
+            chase1: b,
+            attack1: b,
+            die1: b,
+            pain: b,
+            pain1: b,
+        }
     };
 
     // WL6 bosses + Pac-Man ghosts, or their placeholders under SPEAR.
@@ -600,66 +1035,188 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
     if !sod {
         // Hans Grosse (s_boss*): chaingun bursts of 6 T_Shoot volleys.
         hans = push_boss(
-            &mut v, true, 296, (10, 3, 8), Think::Chase,
-            &[(300, 30, A::None), (301, 10, A::Shoot), (302, 10, A::Shoot), (301, 10, A::Shoot),
-              (302, 10, A::Shoot), (301, 10, A::Shoot), (302, 10, A::Shoot), (300, 10, A::None)],
-            &[(304, 15, A::DeathScream), (305, 15, A::None), (306, 15, A::None), (303, 0, A::None)],
+            &mut v,
+            true,
+            296,
+            (10, 3, 8),
+            Think::Chase,
+            &[
+                (300, 30, A::None),
+                (301, 10, A::Shoot),
+                (302, 10, A::Shoot),
+                (301, 10, A::Shoot),
+                (302, 10, A::Shoot),
+                (301, 10, A::Shoot),
+                (302, 10, A::Shoot),
+                (300, 10, A::None),
+            ],
+            &[
+                (304, 15, A::DeathScream),
+                (305, 15, A::None),
+                (306, 15, A::None),
+                (303, 0, A::None),
+            ],
         );
         // Dr. Schabbs (s_schabb*): throws a syringe; runs at the player up close.
         schabbs = push_boss(
-            &mut v, true, 307, (10, 3, 8), Think::SchabbChase,
+            &mut v,
+            true,
+            307,
+            (10, 3, 8),
+            Think::SchabbChase,
             &[(311, 30, A::None), (312, 10, A::ThrowNeedle)],
-            &[(307, 10, A::DeathScream), (307, 140, A::None), (313, 10, A::None),
-              (314, 10, A::None), (315, 10, A::None), (316, 0, A::None)],
+            &[
+                (307, 10, A::DeathScream),
+                (307, 140, A::None),
+                (313, 10, A::None),
+                (314, 10, A::None),
+                (315, 10, A::None),
+                (316, 0, A::None),
+            ],
         );
         // Fake Hitler (s_fake*): a volley of 8 fireballs; always dodges.
         fake = push_boss(
-            &mut v, true, 321, (10, 3, 8), Think::FakeChase,
-            &[(325, 8, A::FakeFire), (325, 8, A::FakeFire), (325, 8, A::FakeFire), (325, 8, A::FakeFire),
-              (325, 8, A::FakeFire), (325, 8, A::FakeFire), (325, 8, A::FakeFire), (325, 8, A::FakeFire),
-              (325, 8, A::None)],
-            &[(328, 10, A::DeathScream), (329, 10, A::None), (330, 10, A::None),
-              (331, 10, A::None), (332, 10, A::None), (333, 0, A::None)],
+            &mut v,
+            true,
+            321,
+            (10, 3, 8),
+            Think::FakeChase,
+            &[
+                (325, 8, A::FakeFire),
+                (325, 8, A::FakeFire),
+                (325, 8, A::FakeFire),
+                (325, 8, A::FakeFire),
+                (325, 8, A::FakeFire),
+                (325, 8, A::FakeFire),
+                (325, 8, A::FakeFire),
+                (325, 8, A::FakeFire),
+                (325, 8, A::None),
+            ],
+            &[
+                (328, 10, A::DeathScream),
+                (329, 10, A::None),
+                (330, 10, A::None),
+                (331, 10, A::None),
+                (332, 10, A::None),
+                (333, 0, A::None),
+            ],
         );
         // Mecha-Hitler (s_mecha*): chaingun bursts; dying morphs into the real
         // Hitler at the end of die3 (A_HitlerMorph).
         mecha = push_boss(
-            &mut v, true, 334, (10, 6, 8), Think::Chase,
-            &[(338, 30, A::None), (339, 10, A::Shoot), (340, 10, A::Shoot),
-              (339, 10, A::Shoot), (340, 10, A::Shoot), (339, 10, A::Shoot)],
-            &[(342, 10, A::DeathScream), (343, 10, A::None), (344, 10, A::HitlerMorph), (341, 0, A::None)],
+            &mut v,
+            true,
+            334,
+            (10, 6, 8),
+            Think::Chase,
+            &[
+                (338, 30, A::None),
+                (339, 10, A::Shoot),
+                (340, 10, A::Shoot),
+                (339, 10, A::Shoot),
+                (340, 10, A::Shoot),
+                (339, 10, A::Shoot),
+            ],
+            &[
+                (342, 10, A::DeathScream),
+                (343, 10, A::None),
+                (344, 10, A::HitlerMorph),
+                (341, 0, A::None),
+            ],
         );
         // Real Hitler (s_hitler*): fastest chase cycle in the game plus chaingun
         // bursts; the long 10-frame die sequence ends on SPR_HITLER_DEAD.
         hitler = push_boss(
-            &mut v, false, 345, (6, 4, 2), Think::Chase,
-            &[(349, 30, A::None), (350, 10, A::Shoot), (351, 10, A::Shoot),
-              (350, 10, A::Shoot), (351, 10, A::Shoot), (350, 10, A::Shoot)],
-            &[(345, 1, A::DeathScream), (345, 140, A::None), (353, 10, A::None), (354, 10, A::None),
-              (355, 10, A::None), (356, 10, A::None), (357, 10, A::None), (358, 10, A::None),
-              (359, 10, A::None), (352, 0, A::None)],
+            &mut v,
+            false,
+            345,
+            (6, 4, 2),
+            Think::Chase,
+            &[
+                (349, 30, A::None),
+                (350, 10, A::Shoot),
+                (351, 10, A::Shoot),
+                (350, 10, A::Shoot),
+                (351, 10, A::Shoot),
+                (350, 10, A::Shoot),
+            ],
+            &[
+                (345, 1, A::DeathScream),
+                (345, 140, A::None),
+                (353, 10, A::None),
+                (354, 10, A::None),
+                (355, 10, A::None),
+                (356, 10, A::None),
+                (357, 10, A::None),
+                (358, 10, A::None),
+                (359, 10, A::None),
+                (352, 0, A::None),
+            ],
         );
         // Gretel Grosse (s_gretel*): Hans's sister, same behavior.
         gretel = push_boss(
-            &mut v, true, 385, (10, 3, 8), Think::Chase,
-            &[(389, 30, A::None), (390, 10, A::Shoot), (391, 10, A::Shoot), (390, 10, A::Shoot),
-              (391, 10, A::Shoot), (390, 10, A::Shoot), (391, 10, A::Shoot), (389, 10, A::None)],
-            &[(393, 15, A::DeathScream), (394, 15, A::None), (395, 15, A::None), (392, 0, A::None)],
+            &mut v,
+            true,
+            385,
+            (10, 3, 8),
+            Think::Chase,
+            &[
+                (389, 30, A::None),
+                (390, 10, A::Shoot),
+                (391, 10, A::Shoot),
+                (390, 10, A::Shoot),
+                (391, 10, A::Shoot),
+                (390, 10, A::Shoot),
+                (391, 10, A::Shoot),
+                (389, 10, A::None),
+            ],
+            &[
+                (393, 15, A::DeathScream),
+                (394, 15, A::None),
+                (395, 15, A::None),
+                (392, 0, A::None),
+            ],
         );
         // Otto Giftmacher (s_gift*): throws rockets.
         gift = push_boss(
-            &mut v, true, 360, (10, 3, 8), Think::SchabbChase,
+            &mut v,
+            true,
+            360,
+            (10, 3, 8),
+            Think::SchabbChase,
             &[(364, 30, A::None), (365, 10, A::ThrowRocket)],
-            &[(360, 1, A::DeathScream), (360, 140, A::None), (366, 10, A::None),
-              (367, 10, A::None), (368, 10, A::None), (369, 0, A::None)],
+            &[
+                (360, 1, A::DeathScream),
+                (360, 140, A::None),
+                (366, 10, A::None),
+                (367, 10, A::None),
+                (368, 10, A::None),
+                (369, 0, A::None),
+            ],
         );
         // General Fettgesicht (s_fat*): a rocket then a chaingun burst.
         fat = push_boss(
-            &mut v, true, 396, (10, 3, 8), Think::SchabbChase,
-            &[(400, 30, A::None), (401, 10, A::ThrowRocket), (402, 10, A::Shoot),
-              (403, 10, A::Shoot), (402, 10, A::Shoot), (403, 10, A::Shoot)],
-            &[(396, 1, A::DeathScream), (396, 140, A::None), (404, 10, A::None),
-              (405, 10, A::None), (406, 10, A::None), (407, 0, A::None)],
+            &mut v,
+            true,
+            396,
+            (10, 3, 8),
+            Think::SchabbChase,
+            &[
+                (400, 30, A::None),
+                (401, 10, A::ThrowRocket),
+                (402, 10, A::Shoot),
+                (403, 10, A::Shoot),
+                (402, 10, A::Shoot),
+                (403, 10, A::Shoot),
+            ],
+            &[
+                (396, 1, A::DeathScream),
+                (396, 140, A::None),
+                (404, 10, A::None),
+                (405, 10, A::None),
+                (406, 10, A::None),
+                (407, 0, A::None),
+            ],
         );
         // SPR_BLINKY_W1=288, SPR_PINKY_W1=290, SPR_CLYDE_W1=292, SPR_INKY_W1=294.
         blinky = push_ghost(&mut v, 288);
@@ -693,60 +1250,217 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
     if sod {
         // Trans Grosse (s_trans*): Hans-style chaingun bursts (SHOOT1=296).
         trans = push_boss(
-            &mut v, true, 292, (10, 3, 8), Think::Chase,
-            &[(296, 30, A::None), (297, 10, A::Shoot), (298, 10, A::Shoot), (297, 10, A::Shoot),
-              (298, 10, A::Shoot), (297, 10, A::Shoot), (298, 10, A::Shoot), (296, 10, A::None)],
-            &[(292, 1, A::DeathScream), (292, 105, A::None), (300, 15, A::None),
-              (301, 15, A::None), (302, 15, A::None), (299, 0, A::None)],
+            &mut v,
+            true,
+            292,
+            (10, 3, 8),
+            Think::Chase,
+            &[
+                (296, 30, A::None),
+                (297, 10, A::Shoot),
+                (298, 10, A::Shoot),
+                (297, 10, A::Shoot),
+                (298, 10, A::Shoot),
+                (297, 10, A::Shoot),
+                (298, 10, A::Shoot),
+                (296, 10, A::None),
+            ],
+            &[
+                (292, 1, A::DeathScream),
+                (292, 105, A::None),
+                (300, 15, A::None),
+                (301, 15, A::None),
+                (302, 15, A::None),
+                (299, 0, A::None),
+            ],
         );
         // UberMutant (s_uber*): 5-shot chaingun burst (SHOOT1=319).
         uber = push_boss(
-            &mut v, true, 315, (10, 3, 8), Think::Chase,
-            &[(319, 30, A::None), (320, 12, A::Shoot), (321, 12, A::Shoot),
-              (322, 12, A::Shoot), (321, 12, A::Shoot), (320, 12, A::Shoot), (319, 12, A::None)],
-            &[(315, 1, A::DeathScream), (315, 70, A::None), (323, 15, A::None),
-              (324, 15, A::None), (325, 15, A::None), (326, 15, A::None), (327, 0, A::None)],
+            &mut v,
+            true,
+            315,
+            (10, 3, 8),
+            Think::Chase,
+            &[
+                (319, 30, A::None),
+                (320, 12, A::Shoot),
+                (321, 12, A::Shoot),
+                (322, 12, A::Shoot),
+                (321, 12, A::Shoot),
+                (320, 12, A::Shoot),
+                (319, 12, A::None),
+            ],
+            &[
+                (315, 1, A::DeathScream),
+                (315, 70, A::None),
+                (323, 15, A::None),
+                (324, 15, A::None),
+                (325, 15, A::None),
+                (326, 15, A::None),
+                (327, 0, A::None),
+            ],
         );
         // Barnacle Wilhelm (s_will*): a rocket then chaingun bursts; dodges.
         will = push_boss(
-            &mut v, true, 303, (10, 3, 8), Think::SchabbChase,
-            &[(307, 30, A::None), (308, 10, A::ThrowRocket), (309, 10, A::Shoot),
-              (310, 10, A::Shoot), (309, 10, A::Shoot), (310, 10, A::Shoot)],
-            &[(303, 1, A::DeathScream), (303, 70, A::None), (311, 10, A::None),
-              (312, 10, A::None), (313, 10, A::None), (314, 0, A::None)],
+            &mut v,
+            true,
+            303,
+            (10, 3, 8),
+            Think::SchabbChase,
+            &[
+                (307, 30, A::None),
+                (308, 10, A::ThrowRocket),
+                (309, 10, A::Shoot),
+                (310, 10, A::Shoot),
+                (309, 10, A::Shoot),
+                (310, 10, A::Shoot),
+            ],
+            &[
+                (303, 1, A::DeathScream),
+                (303, 70, A::None),
+                (311, 10, A::None),
+                (312, 10, A::None),
+                (313, 10, A::None),
+                (314, 0, A::None),
+            ],
         );
         // Death Knight (s_death*): alternating rockets and chaingun (SHOOT1=332).
         death = push_boss(
-            &mut v, true, 328, (10, 3, 8), Think::SchabbChase,
-            &[(332, 30, A::None), (333, 10, A::ThrowRocket), (335, 10, A::Shoot),
-              (334, 10, A::ThrowRocket), (335, 10, A::Shoot)],
-            &[(328, 1, A::DeathScream), (328, 105, A::None), (336, 10, A::None),
-              (337, 10, A::None), (338, 10, A::None), (339, 10, A::None),
-              (340, 10, A::None), (341, 10, A::None), (342, 0, A::None)],
+            &mut v,
+            true,
+            328,
+            (10, 3, 8),
+            Think::SchabbChase,
+            &[
+                (332, 30, A::None),
+                (333, 10, A::ThrowRocket),
+                (335, 10, A::Shoot),
+                (334, 10, A::ThrowRocket),
+                (335, 10, A::Shoot),
+            ],
+            &[
+                (328, 1, A::DeathScream),
+                (328, 105, A::None),
+                (336, 10, A::None),
+                (337, 10, A::None),
+                (338, 10, A::None),
+                (339, 10, A::None),
+                (340, 10, A::None),
+                (341, 10, A::None),
+                (342, 0, A::None),
+            ],
         );
         // Angel of Death (s_angel*): SHOOT1=355, SHOOT2=356; a single volley.
         angel = push_boss(
-            &mut v, true, 351, (10, 3, 8), Think::SchabbChase,
-            &[(355, 10, A::None), (356, 20, A::ThrowRocket), (355, 10, A::None)],
-            &[(351, 1, A::DeathScream), (351, 105, A::None), (359, 10, A::None),
-              (360, 10, A::None), (361, 10, A::None), (362, 10, A::None),
-              (363, 10, A::None), (364, 10, A::None), (365, 10, A::None), (366, 0, A::None)],
+            &mut v,
+            true,
+            351,
+            (10, 3, 8),
+            Think::SchabbChase,
+            &[
+                (355, 10, A::None),
+                (356, 20, A::ThrowRocket),
+                (355, 10, A::None),
+            ],
+            &[
+                (351, 1, A::DeathScream),
+                (351, 105, A::None),
+                (359, 10, A::None),
+                (360, 10, A::None),
+                (361, 10, A::None),
+                (362, 10, A::None),
+                (363, 10, A::None),
+                (364, 10, A::None),
+                (365, 10, A::None),
+                (366, 0, A::None),
+            ],
         );
         // Spectre (ghostobj under SPEAR): a wait/stand, a T_Ghosts chase loop
         // (SPECTRE_W1=343..346), and a 4-frame fade death (SPECTRE_F1=347..350).
         spectre = {
             let b = v.len();
-            v.push(State { sprite: 343, rotate: false, tics: 0, think: Think::Stand, action: A::None, next: b });
-            v.push(State { sprite: 343, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b + 2 });
-            v.push(State { sprite: 344, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b + 3 });
-            v.push(State { sprite: 345, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b + 4 });
-            v.push(State { sprite: 346, rotate: false, tics: 10, think: Think::GhostChase, action: A::None, next: b + 1 });
+            v.push(State {
+                sprite: 343,
+                rotate: false,
+                tics: 0,
+                think: Think::Stand,
+                action: A::None,
+                next: b,
+            });
+            v.push(State {
+                sprite: 343,
+                rotate: false,
+                tics: 10,
+                think: Think::GhostChase,
+                action: A::None,
+                next: b + 2,
+            });
+            v.push(State {
+                sprite: 344,
+                rotate: false,
+                tics: 10,
+                think: Think::GhostChase,
+                action: A::None,
+                next: b + 3,
+            });
+            v.push(State {
+                sprite: 345,
+                rotate: false,
+                tics: 10,
+                think: Think::GhostChase,
+                action: A::None,
+                next: b + 4,
+            });
+            v.push(State {
+                sprite: 346,
+                rotate: false,
+                tics: 10,
+                think: Think::GhostChase,
+                action: A::None,
+                next: b + 1,
+            });
             let die0 = b + 5;
-            v.push(State { sprite: 347, rotate: false, tics: 10, think: Think::None, action: A::DeathScream, next: die0 + 1 });
-            v.push(State { sprite: 348, rotate: false, tics: 10, think: Think::None, action: A::None, next: die0 + 2 });
-            v.push(State { sprite: 349, rotate: false, tics: 10, think: Think::None, action: A::None, next: die0 + 3 });
-            v.push(State { sprite: 350, rotate: false, tics: 0, think: Think::None, action: A::None, next: die0 + 3 });
-            KindStates { stand: b, path1: b, chase1: b + 1, attack1: b + 1, die1: die0, pain: b + 1, pain1: b + 1 }
+            v.push(State {
+                sprite: 347,
+                rotate: false,
+                tics: 10,
+                think: Think::None,
+                action: A::DeathScream,
+                next: die0 + 1,
+            });
+            v.push(State {
+                sprite: 348,
+                rotate: false,
+                tics: 10,
+                think: Think::None,
+                action: A::None,
+                next: die0 + 2,
+            });
+            v.push(State {
+                sprite: 349,
+                rotate: false,
+                tics: 10,
+                think: Think::None,
+                action: A::None,
+                next: die0 + 3,
+            });
+            v.push(State {
+                sprite: 350,
+                rotate: false,
+                tics: 0,
+                think: Think::None,
+                action: A::None,
+                next: die0 + 3,
+            });
+            KindStates {
+                stand: b,
+                path1: b,
+                chase1: b + 1,
+                attack1: b + 1,
+                die1: die0,
+                pain: b + 1,
+                pain1: b + 1,
+            }
         };
     } else {
         trans = placeholder;
@@ -978,7 +1692,12 @@ impl Actors {
     /// Spawn the level's actors for a given variant. `sprite_shift` is added to
     /// every shared-enemy VSWAP sprite (4 for Spear of Destiny); `sod` selects
     /// the Spear boss/spectre spawn codes instead of the WL6 boss/ghost codes.
-    pub fn spawn_from_level_variant(level: &Level, skill: u8, sprite_shift: u16, sod: bool) -> Self {
+    pub fn spawn_from_level_variant(
+        level: &Level,
+        skill: u8,
+        sprite_shift: u16,
+        sod: bool,
+    ) -> Self {
         let table = build_states(sprite_shift, sod);
         let mut list = Vec::new();
         for (i, &code) in level.plane1.iter().enumerate() {
@@ -1065,7 +1784,11 @@ impl Actors {
                 }
                 let kd = table.kinds[kind.index()];
                 let ambush = level.plane0[i] == 106;
-                let speed = if kind == Kind::Dog { SPD_DOG } else { SPD_PATROL };
+                let speed = if kind == Kind::Dog {
+                    SPD_DOG
+                } else {
+                    SPD_PATROL
+                };
                 let mut a = Actor {
                     kind,
                     x: tx as f32 + 0.5,
@@ -1085,7 +1808,9 @@ impl Actors {
                     visible: false,
                 };
                 // Randomize the starting frame phase, as SpawnNewObj does.
-                let mut rnd = Rnd { index: list.len() & 0xff };
+                let mut rnd = Rnd {
+                    index: list.len() & 0xff,
+                };
                 let tt = table.states[a.state].tics;
                 if tt > 0 {
                     a.ticcount = (rnd.roll() % tt as u32) as f32;
@@ -1154,7 +1879,10 @@ impl Actors {
     /// The world position of the first actor of `kind` (used to aim the deathcam
     /// at a just-killed boss).
     pub fn find_pos(&self, kind: Kind) -> Option<(f32, f32)> {
-        self.list.iter().find(|a| a.kind == kind).map(|a| (a.x, a.y))
+        self.list
+            .iter()
+            .find(|a| a.kind == kind)
+            .map(|a| (a.x, a.y))
     }
 
     /// Advance only the dead actors' death animations by `tics`, running no AI,
@@ -1284,7 +2012,15 @@ impl Actors {
             let kind = ProjKind::from_tag(r.get_u8()?)?;
             let anim = r.get_f32()?;
             let dead = r.get_bool()?;
-            self.projectiles.push(Projectile { x, y, vx, vy, kind, anim, dead });
+            self.projectiles.push(Projectile {
+                x,
+                y,
+                vx,
+                vy,
+                kind,
+                anim,
+                dead,
+            });
         }
         Ok(())
     }
@@ -1292,7 +2028,15 @@ impl Actors {
     /// Advance all actors one step. `tics` is elapsed time in tic units.
     /// `madenoise` is set when the player fired this step (WL_STATE.C). Returns
     /// total damage dealt to the player.
-    pub fn update(&mut self, tics: f32, world: &mut World, px: f32, py: f32, running: bool, madenoise: bool) {
+    pub fn update(
+        &mut self,
+        tics: f32,
+        world: &mut World,
+        px: f32,
+        py: f32,
+        running: bool,
+        madenoise: bool,
+    ) {
         self.damage = 0;
         let ptx = px.floor() as i32;
         let pty = py.floor() as i32;
@@ -1330,7 +2074,11 @@ impl Actors {
                 p.x += (p.vx * tics).clamp(-1.0, 1.0);
                 p.y += (p.vy * tics).clamp(-1.0, 1.0);
             }
-            let (x, y, kind) = (self.projectiles[i].x, self.projectiles[i].y, self.projectiles[i].kind);
+            let (x, y, kind) = (
+                self.projectiles[i].x,
+                self.projectiles[i].y,
+                self.projectiles[i].kind,
+            );
             if !projectile_try_move(world, x, y) {
                 self.projectiles[i].dead = true;
                 continue;
@@ -1384,7 +2132,10 @@ impl Actors {
                 if world.wall_at(nx, ny) {
                     continue;
                 }
-                if world.door_lookup(nx, ny).is_some_and(|d| world.door_position(d) < DOOR_FLOOD) {
+                if world
+                    .door_lookup(nx, ny)
+                    .is_some_and(|d| world.door_position(d) < DOOR_FLOOD)
+                {
                     continue;
                 }
                 self.reachable[idx] = true;
@@ -1403,7 +2154,18 @@ impl Actors {
     // ---- DoActor state-machine driver (WL_PLAY.C) -------------------------
 
     #[allow(clippy::too_many_arguments)]
-    fn do_actor(&mut self, i: usize, tics: f32, world: &mut World, px: f32, py: f32, ptx: i32, pty: i32, running: bool, madenoise: bool) {
+    fn do_actor(
+        &mut self,
+        i: usize,
+        tics: f32,
+        world: &mut World,
+        px: f32,
+        py: f32,
+        ptx: i32,
+        pty: i32,
+        running: bool,
+        madenoise: bool,
+    ) {
         // Permanent (tictime 0) state: just think each frame.
         if self.list[i].ticcount == 0.0 {
             let think = self.table.states[self.list[i].state].think;
@@ -1428,7 +2190,18 @@ impl Actors {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn run_think(&mut self, i: usize, think: Think, tics: f32, world: &mut World, px: f32, py: f32, ptx: i32, pty: i32, madenoise: bool) {
+    fn run_think(
+        &mut self,
+        i: usize,
+        think: Think,
+        tics: f32,
+        world: &mut World,
+        px: f32,
+        py: f32,
+        ptx: i32,
+        pty: i32,
+        madenoise: bool,
+    ) {
         match think {
             Think::None => {}
             Think::Stand => {
@@ -1449,7 +2222,17 @@ impl Actors {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn run_action(&mut self, i: usize, action: Action, world: &World, px: f32, py: f32, ptx: i32, pty: i32, running: bool) {
+    fn run_action(
+        &mut self,
+        i: usize,
+        action: Action,
+        world: &World,
+        px: f32,
+        py: f32,
+        ptx: i32,
+        pty: i32,
+        running: bool,
+    ) {
         match action {
             Action::None => {}
             Action::DeathScream => {
@@ -1468,7 +2251,17 @@ impl Actors {
     // ---- Perception (WL_STATE.C) ------------------------------------------
 
     #[allow(clippy::too_many_arguments)]
-    fn sight_player(&mut self, i: usize, tics: f32, world: &World, px: f32, py: f32, _ptx: i32, _pty: i32, madenoise: bool) -> bool {
+    fn sight_player(
+        &mut self,
+        i: usize,
+        tics: f32,
+        world: &World,
+        px: f32,
+        py: f32,
+        _ptx: i32,
+        _pty: i32,
+        madenoise: bool,
+    ) -> bool {
         if self.list[i].flags & FL_ATTACKMODE != 0 {
             return false;
         }
@@ -1597,7 +2390,17 @@ impl Actors {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn t_chase(&mut self, i: usize, tics: f32, world: &mut World, px: f32, py: f32, ptx: i32, pty: i32, mode: Chase) {
+    fn t_chase(
+        &mut self,
+        i: usize,
+        tics: f32,
+        world: &mut World,
+        px: f32,
+        py: f32,
+        ptx: i32,
+        pty: i32,
+        mode: Chase,
+    ) {
         let dog = mode == Chase::Dog;
         let dx = (self.list[i].tilex - ptx).abs();
         let dy = (self.list[i].tiley - pty).abs();
@@ -1677,7 +2480,16 @@ impl Actors {
     /// NOT phase through walls) and glides at SPDDOG. No sighting, no attack, no
     /// dodge; the contact damage is applied inside [`Actors::move_obj`].
     #[allow(clippy::too_many_arguments)]
-    fn t_ghost(&mut self, i: usize, tics: f32, world: &mut World, px: f32, py: f32, ptx: i32, pty: i32) {
+    fn t_ghost(
+        &mut self,
+        i: usize,
+        tics: f32,
+        world: &mut World,
+        px: f32,
+        py: f32,
+        ptx: i32,
+        pty: i32,
+    ) {
         if self.list[i].dir == NODIR {
             self.select_chase_dir(i, world, ptx, pty);
             if self.list[i].dir == NODIR {
@@ -1995,7 +2807,16 @@ impl Actors {
     // ---- Enemy attacks (WL_ACT2.C) ----------------------------------------
 
     #[allow(clippy::too_many_arguments)]
-    fn t_shoot(&mut self, i: usize, world: &World, px: f32, py: f32, ptx: i32, pty: i32, running: bool) {
+    fn t_shoot(
+        &mut self,
+        i: usize,
+        world: &World,
+        px: f32,
+        py: f32,
+        ptx: i32,
+        pty: i32,
+        running: bool,
+    ) {
         let a = &self.list[i];
         if !self.reachable_tile(a.tilex, a.tiley) {
             return;
@@ -2012,7 +2833,11 @@ impl Actors {
         }
         let visible = a.visible;
         let hitchance = if running {
-            if visible { 160 - dist * 16 } else { 160 - dist * 8 }
+            if visible {
+                160 - dist * 16
+            } else {
+                160 - dist * 8
+            }
         } else if visible {
             256 - dist * 16
         } else {
@@ -2048,7 +2873,14 @@ impl Actors {
     /// Fire the current weapon down the view center. Returns points scored from
     /// any kill. `knife` selects the melee model (short range, no line check
     /// beyond range).
-    pub fn player_fire(&mut self, world: &World, px: f32, py: f32, pangle: f32, knife: bool) -> i32 {
+    pub fn player_fire(
+        &mut self,
+        world: &World,
+        px: f32,
+        py: f32,
+        pangle: f32,
+        knife: bool,
+    ) -> i32 {
         // Find the nearest live, roughly-centered, unobstructed target.
         let (dir_x, dir_y) = (pangle.cos(), pangle.sin());
         let mut best: Option<usize> = None;
@@ -2116,7 +2948,11 @@ impl Actors {
         // Dogs and bosses have no pain frame.
         if self.list[i].kind.has_pain() {
             let kd = self.table.kinds[self.list[i].kind.index()];
-            let pain = if self.list[i].health & 1 != 0 { kd.pain } else { kd.pain1 };
+            let pain = if self.list[i].health & 1 != 0 {
+                kd.pain
+            } else {
+                kd.pain1
+            };
             self.new_state(i, pain);
         }
         0
@@ -2299,7 +3135,10 @@ fn projectile_try_move(world: &World, x: f32, y: f32) -> bool {
             }
             // A door blocks like a wall until it has slid (nearly) fully open
             // (the original keeps opening/closing doors in `actorat`).
-            if world.door_lookup(tx, ty).is_some_and(|d| !world.door_open_enough(d)) {
+            if world
+                .door_lookup(tx, ty)
+                .is_some_and(|d| !world.door_open_enough(d))
+            {
                 return false;
             }
         }
@@ -2349,7 +3188,10 @@ fn check_line(world: &World, x0: f32, y0: f32, x1: f32, y1: f32) -> bool {
         if world.wall_at(tx, ty) {
             return false;
         }
-        if world.door_lookup(tx, ty).is_some_and(|d| world.door_position(d) < DOOR_SEE) {
+        if world
+            .door_lookup(tx, ty)
+            .is_some_and(|d| world.door_position(d) < DOOR_SEE)
+        {
             return false;
         }
     }

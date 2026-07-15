@@ -88,8 +88,11 @@ impl AudioData {
 
         let sod = ext.eq_ignore_ascii_case("SOD");
         // Bank offsets differ per variant.
-        let (start_adlib, start_music, num_music) =
-            if sod { (81usize, 243usize, 24usize) } else { (START_ADLIB_SOUNDS, START_MUSIC, NUM_MUSIC) };
+        let (start_adlib, start_music, num_music) = if sod {
+            (81usize, 243usize, 24usize)
+        } else {
+            (START_ADLIB_SOUNDS, START_MUSIC, NUM_MUSIC)
+        };
 
         // The sfx vec is always indexed by the WL6 sound-enum id the engine emits.
         let mut sfx = Vec::with_capacity(NUM_SOUNDS);
@@ -101,11 +104,23 @@ impl AudioData {
         let mut music = Vec::with_capacity(num_music);
         for m in 0..num_music {
             let idx = start_music + m;
-            music.push(if idx < num_chunks { parse_imf(chunk(idx)) } else { Vec::new() });
+            music.push(if idx < num_chunks {
+                parse_imf(chunk(idx))
+            } else {
+                Vec::new()
+            });
         }
 
-        let digi_map = if sod { [-1i32; NUM_SOUNDS] } else { build_digi_map() };
-        Ok(Self { sfx, music, digi_map })
+        let digi_map = if sod {
+            [-1i32; NUM_SOUNDS]
+        } else {
+            build_digi_map()
+        };
+        Ok(Self {
+            sfx,
+            music,
+            digi_map,
+        })
     }
 }
 
@@ -200,7 +215,12 @@ fn parse_adlib(c: &[u8]) -> Option<AdLibSound> {
     if data.is_empty() {
         return None;
     }
-    Some(AdLibSound { priority, instrument, block, data })
+    Some(AdLibSound {
+        priority,
+        instrument,
+        block,
+        data,
+    })
 }
 
 /// Parse a music chunk: a `u16` byte length, then that many bytes of IMF data.

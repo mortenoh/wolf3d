@@ -14,7 +14,12 @@ use wolf3d::hud::VIEW_H;
 /// a save/load through an isolated directory.
 #[test]
 fn config_roundtrips() {
-    let cfg = Config { view_size: 128, sfx_mode: 2, music_on: false, mouse_sensitivity: 17 };
+    let cfg = Config {
+        view_size: 128,
+        sfx_mode: 2,
+        music_on: false,
+        mouse_sensitivity: 17,
+    };
 
     // In-memory roundtrip.
     let bytes = cfg.to_bytes();

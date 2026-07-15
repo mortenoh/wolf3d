@@ -9,11 +9,11 @@
 //! (`TEXTCOLOR`, brighter `HIGHLIGHT` under the gun), and disabled items are the
 //! dark-red `DEACTIVE`.
 
-use crate::assets::vgagraph::Picture;
 use crate::assets::VgaGraph;
+use crate::assets::vgagraph::Picture;
+use crate::config::MAX_MOUSE_SENS;
 use crate::fb::{Framebuffer, HEIGHT, WIDTH};
 use crate::font::Font;
-use crate::config::MAX_MOUSE_SENS;
 use crate::game::SfxMode;
 use crate::savegame::NUM_SLOTS;
 
@@ -59,19 +59,49 @@ pub struct MenuItem {
     pub active: bool,
 }
 pub const MAIN_ITEMS: [MenuItem; 10] = [
-    MenuItem { label: "New Game", active: true },
-    MenuItem { label: "Sound", active: true },
-    MenuItem { label: "Control", active: true },
-    MenuItem { label: "Load Game", active: true },
+    MenuItem {
+        label: "New Game",
+        active: true,
+    },
+    MenuItem {
+        label: "Sound",
+        active: true,
+    },
+    MenuItem {
+        label: "Control",
+        active: true,
+    },
+    MenuItem {
+        label: "Load Game",
+        active: true,
+    },
     // Save Game is only reachable from the pause menu during play; the game
     // state machine greys it via `Game::main_item_active` when not started.
-    MenuItem { label: "Save Game", active: true },
-    MenuItem { label: "Change View", active: true },
-    MenuItem { label: "Read This!", active: true },
-    MenuItem { label: "View Scores", active: true },
+    MenuItem {
+        label: "Save Game",
+        active: true,
+    },
+    MenuItem {
+        label: "Change View",
+        active: true,
+    },
+    MenuItem {
+        label: "Read This!",
+        active: true,
+    },
+    MenuItem {
+        label: "View Scores",
+        active: true,
+    },
     // Returns to the title / attract loop (WL_MENU.C "Back to Demo").
-    MenuItem { label: "Back to Demo", active: true },
-    MenuItem { label: "Quit", active: true },
+    MenuItem {
+        label: "Back to Demo",
+        active: true,
+    },
+    MenuItem {
+        label: "Quit",
+        active: true,
+    },
 ];
 /// Indices of the wired main-menu entries for the game state machine.
 pub const ITEM_NEW_GAME: usize = 0;
@@ -141,7 +171,10 @@ impl Menu {
         let (title, title_bottom) = match gfx.title_palette {
             Some(pal_chunk) => {
                 let pal = vga.load_vga_palette(pal_chunk);
-                (vga.pic_with_palette(gfx.title1, &pal), gfx.title2.map(|c| vga.pic_with_palette(c, &pal)))
+                (
+                    vga.pic_with_palette(gfx.title1, &pal),
+                    gfx.title2.map(|c| vga.pic_with_palette(c, &pal)),
+                )
             }
             None => (vga.pic(gfx.title1), gfx.title2.map(|c| vga.pic(c))),
         };
@@ -152,7 +185,9 @@ impl Menu {
             options: vga.pic(gfx.options),
             cursor: [vga.pic(gfx.cursor1), vga.pic(gfx.cursor2)],
             episodes,
-            difficulty: (0..NUM_DIFFICULTIES).map(|d| vga.pic(gfx.baby_mode + d)).collect(),
+            difficulty: (0..NUM_DIFFICULTIES)
+                .map(|d| vga.pic(gfx.baby_mode + d))
+                .collect(),
             radio: [vga.pic(gfx.not_selected), vga.pic(gfx.selected)],
             sound_titles: [vga.pic(gfx.fx_title), vga.pic(gfx.music_title)],
             ls_titles: [vga.pic(gfx.load_game), vga.pic(gfx.save_game)],
@@ -192,7 +227,11 @@ impl Menu {
     /// (WL_PLAY.C PlayDemo shows "DEMO" over the recorded run). `blink` drives a
     /// slow pulse between the two grey shades.
     pub fn draw_demo_label(&self, fb: &mut Framebuffer) {
-        let color = if self.blink < 0.5 { HIGHLIGHT } else { TEXTCOLOR };
+        let color = if self.blink < 0.5 {
+            HIGHLIGHT
+        } else {
+            TEXTCOLOR
+        };
         // Shadowed, near the top-left corner of the 3D view.
         self.font.draw(fb, 9, 5, "DEMO", 0);
         self.font.draw(fb, 8, 4, "DEMO", color);
@@ -217,7 +256,8 @@ impl Menu {
                 TEXTCOLOR
             };
             let y = MENU_Y + i as i32 * ITEM_STEP;
-            self.font.draw(fb, MENU_X + MENU_INDENT, y, item.label, color);
+            self.font
+                .draw(fb, MENU_X + MENU_INDENT, y, item.label, color);
         }
 
         // DrawGun: cursor at x = MENU_X & ~7, y = (MENU_Y - 2) + which*13.
@@ -230,7 +270,8 @@ impl Menu {
     pub fn render_episode(&self, fb: &mut Framebuffer, selected: usize) {
         clear(fb, BORDCOLOR);
         draw_stripes(fb, 0);
-        self.font.draw_centered(fb, 3, "Which episode to play?", HIGHLIGHT);
+        self.font
+            .draw_centered(fb, 3, "Which episode to play?", HIGHLIGHT);
 
         for (i, pic) in self.episodes.iter().enumerate() {
             let y = NE_Y + i as i32 * 26;
@@ -239,7 +280,8 @@ impl Menu {
             let tx = NE_X + 32 + pic.width as i32 + 8;
             let (title, subtitle) = EPISODE_NAMES[i];
             self.font.draw(fb, tx, y + 1, title, color);
-            self.font.draw(fb, tx, y + 1 + self.font.height() as i32, subtitle, color);
+            self.font
+                .draw(fb, tx, y + 1 + self.font.height() as i32, subtitle, color);
         }
         let cy = NE_Y + selected as i32 * 26 + 4;
         blit(fb, self.cursor_frame(), NE_X, cy);
@@ -251,7 +293,8 @@ impl Menu {
     pub fn render_difficulty(&self, fb: &mut Framebuffer, selected: usize) {
         clear(fb, BORDCOLOR);
         draw_stripes(fb, 10);
-        self.font.draw_centered(fb, 68, "How tough are you?", HIGHLIGHT);
+        self.font
+            .draw_centered(fb, 68, "How tough are you?", HIGHLIGHT);
 
         let pic = &self.difficulty[selected];
         let x = (WIDTH as i32 - pic.width as i32) / 2;
@@ -259,15 +302,26 @@ impl Menu {
 
         // The skill phrase under the mugshot, then a navigation hint.
         let phrase_y = 90 + pic.height as i32 + 6;
-        self.font.draw_centered(fb, phrase_y, DIFFICULTY_NAMES[selected], HIGHLIGHT);
         self.font
-            .draw_centered(fb, phrase_y + self.font.height() as i32 + 8, "Up / Down to choose, Enter to start", TEXTCOLOR);
+            .draw_centered(fb, phrase_y, DIFFICULTY_NAMES[selected], HIGHLIGHT);
+        self.font.draw_centered(
+            fb,
+            phrase_y + self.font.height() as i32 + 8,
+            "Up / Down to choose, Enter to start",
+            TEXTCOLOR,
+        );
     }
 
     /// The Sound options screen (WL_MENU.C CP_Sound), collapsed to two radio
     /// groups: sound effects (Digitized+AdLib / AdLib only / None) and music
     /// (AdLib / None). The filled bullet marks the active option in each group.
-    pub fn render_sound(&self, fb: &mut Framebuffer, sfx: SfxMode, music_on: bool, selected: usize) {
+    pub fn render_sound(
+        &self,
+        fb: &mut Framebuffer,
+        sfx: SfxMode,
+        music_on: bool,
+        selected: usize,
+    ) {
         clear(fb, BORDCOLOR);
         draw_stripes(fb, 10);
 
@@ -309,7 +363,8 @@ impl Menu {
         let rx = SM_X + MENU_INDENT;
         blit(fb, pic, rx, y);
         let color = if cursor { HIGHLIGHT } else { TEXTCOLOR };
-        self.font.draw(fb, rx + pic.width as i32 + 8, y, label, color);
+        self.font
+            .draw(fb, rx + pic.width as i32 + 8, y, label, color);
     }
 
     /// The Load Game slot list (WL_MENU.C CP_LoadGame): filled slots show their
@@ -319,17 +374,26 @@ impl Menu {
     /// under the grid.
     pub fn render_level_select(&self, fb: &mut Framebuffer, names: &[String], selected: usize) {
         clear(fb, BORDCOLOR);
-        self.font.draw_centered(fb, 4, "Warp to which level?", HIGHLIGHT);
+        self.font
+            .draw_centered(fb, 4, "Warp to which level?", HIGHLIGHT);
 
         const GRID_X: i32 = 34; // centers 6 x 42px columns
         const GRID_Y: i32 = 24;
         const COL_W: i32 = 42;
         const ROW_H: i32 = 14;
-        draw_window(fb, GRID_X - 8, GRID_Y - 3, 6 * COL_W + 10, 11 * ROW_H + 2, BKGDCOLOR);
+        draw_window(
+            fb,
+            GRID_X - 8,
+            GRID_Y - 3,
+            6 * COL_W + 10,
+            11 * ROW_H + 2,
+            BKGDCOLOR,
+        );
 
         for ep in 0..6i32 {
             let x = GRID_X + ep * COL_W;
-            self.font.draw(fb, x, GRID_Y, &format!("E{}", ep + 1), TEXTCOLOR);
+            self.font
+                .draw(fb, x, GRID_Y, &format!("E{}", ep + 1), TEXTCOLOR);
             for floor in 0..10i32 {
                 let idx = (ep * 10 + floor) as usize;
                 let y = GRID_Y + (floor + 1) * ROW_H;
@@ -349,7 +413,8 @@ impl Menu {
         }
 
         let name = names.get(selected).map(String::as_str).unwrap_or("?");
-        self.font.draw_centered(fb, GRID_Y + 11 * ROW_H + 4, name, HIGHLIGHT);
+        self.font
+            .draw_centered(fb, GRID_Y + 11 * ROW_H + 4, name, HIGHLIGHT);
     }
 
     /// Change View (WL_MENU.C CP_ChangeView): a caption band drawn over the live
@@ -358,7 +423,8 @@ impl Menu {
     pub fn render_change_view(&self, fb: &mut Framebuffer, view_w: usize) {
         bar(fb, 0, 0, WIDTH as i32, 22, 0);
         hlin(fb, 0, WIDTH as i32 - 1, 22, STRIPE);
-        self.font.draw_centered(fb, 2, "Change View - Left / Right to size", HIGHLIGHT);
+        self.font
+            .draw_centered(fb, 2, "Change View - Left / Right to size", HIGHLIGHT);
         let size = view_w / 16; // 4..=20 (original's ChangeView units)
         self.font.draw_centered(
             fb,
@@ -386,13 +452,31 @@ impl Menu {
         bar(fb, track_x, track_y, track_w, 4, DEACTIVE);
         let knob = track_x + sensitivity as i32 * (track_w - 6) / MAX_MOUSE_SENS as i32;
         bar(fb, knob, track_y - 4, 6, 12, HIGHLIGHT);
-        self.font.draw(fb, track_x + track_w + 8, track_y - 4, &format!("{sensitivity}"), HIGHLIGHT);
+        self.font.draw(
+            fb,
+            track_x + track_w + 8,
+            track_y - 4,
+            &format!("{sensitivity}"),
+            HIGHLIGHT,
+        );
 
         let fy = 118;
-        self.font.draw_centered(fb, fy, "Left / Right adjust  -  Enter / Esc accepts", TEXTCOLOR);
-        self.font.draw_centered(fb, fy + 13, "Key rebinding not available", DEACTIVE);
-        self.font.draw_centered(fb, fy + 30, "Shortcuts:  M music   6 warp   7 god", TEXTCOLOR);
-        self.font.draw_centered(fb, fy + 43, "8 items   9 infinite ammo   0 all", TEXTCOLOR);
+        self.font.draw_centered(
+            fb,
+            fy,
+            "Left / Right adjust  -  Enter / Esc accepts",
+            TEXTCOLOR,
+        );
+        self.font
+            .draw_centered(fb, fy + 13, "Key rebinding not available", DEACTIVE);
+        self.font.draw_centered(
+            fb,
+            fy + 30,
+            "Shortcuts:  M music   6 warp   7 god",
+            TEXTCOLOR,
+        );
+        self.font
+            .draw_centered(fb, fy + 43, "8 items   9 infinite ammo   0 all", TEXTCOLOR);
     }
 
     pub fn render_load(&self, fb: &mut Framebuffer, slots: &[Option<String>], selected: usize) {

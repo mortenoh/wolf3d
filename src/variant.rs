@@ -138,7 +138,7 @@ const SOD_SONGS: [usize; 21] = [
     1, 5, 9, 10, 15, // floors 6-10 (Wilhelm boss on 10)
     8, 3, 12, 11, 13, // floors 11-15
     15, 21, 15, // floors 16-18 (Uber boss on 16, Death Knight on 18)
-    18, 0, // floors 19-20 (secret)
+    18, 0,  // floors 19-20 (secret)
     17, // floor 21 (Angel of Death boss)
 ];
 
@@ -170,11 +170,23 @@ pub struct Variant {
 
 impl Variant {
     pub fn wl6() -> Self {
-        Self { id: GameId::Wl6, ext: "WL6", has_episodes: true, gfx: GFX_WL6, sprite_shift: 0 }
+        Self {
+            id: GameId::Wl6,
+            ext: "WL6",
+            has_episodes: true,
+            gfx: GFX_WL6,
+            sprite_shift: 0,
+        }
     }
 
     pub fn sod() -> Self {
-        Self { id: GameId::Sod, ext: "SOD", has_episodes: false, gfx: GFX_SOD, sprite_shift: 4 }
+        Self {
+            id: GameId::Sod,
+            ext: "SOD",
+            has_episodes: false,
+            gfx: GFX_SOD,
+            sprite_shift: 4,
+        }
     }
 
     pub fn is_sod(&self) -> bool {
@@ -190,14 +202,21 @@ impl Variant {
     /// otherwise auto-detect — if only one data set is present use it, and if
     /// both are present default to WL6.
     pub fn detect() -> Self {
-        match std::env::var("WOLF3D_GAME").ok().map(|s| s.to_ascii_lowercase()) {
+        match std::env::var("WOLF3D_GAME")
+            .ok()
+            .map(|s| s.to_ascii_lowercase())
+        {
             Some(s) if s == "sod" || s == "spear" => return Self::sod(),
             Some(s) if s == "wl6" || s == "wolf3d" => return Self::wl6(),
             _ => {}
         }
         let wl6 = Self::present("WL6");
         let sod = Self::present("SOD");
-        if sod && !wl6 { Self::sod() } else { Self::wl6() }
+        if sod && !wl6 {
+            Self::sod()
+        } else {
+            Self::wl6()
+        }
     }
 
     /// The music track index for a floor (`mapon`, 0-based). WL6 defers to the
@@ -236,7 +255,10 @@ impl Variant {
     /// Par time in minutes for a floor (0 = no par).
     pub fn par_minutes(&self, level_idx: usize) -> f32 {
         match self.id {
-            GameId::Wl6 => crate::inter::PAR_TIMES.get(level_idx).copied().unwrap_or(0.0),
+            GameId::Wl6 => crate::inter::PAR_TIMES
+                .get(level_idx)
+                .copied()
+                .unwrap_or(0.0),
             GameId::Sod => SOD_PAR_TIMES.get(level_idx).copied().unwrap_or(0.0),
         }
     }

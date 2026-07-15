@@ -88,20 +88,52 @@ pub fn run(game: &mut Game, script: &str) {
                     turn_right: op == "r",
                     ..Default::default()
                 };
-                step(game, &input, secs("degrees").to_radians() / TURN_SPEED, &mut rec);
+                step(
+                    game,
+                    &input,
+                    secs("degrees").to_radians() / TURN_SPEED,
+                    &mut rec,
+                );
             }
             "use" => {
-                tick(game, &Input { use_door: true, ..Default::default() }, &mut rec);
+                tick(
+                    game,
+                    &Input {
+                        use_door: true,
+                        ..Default::default()
+                    },
+                    &mut rec,
+                );
             }
             "fire" => {
-                tick(game, &Input { fire: true, ..Default::default() }, &mut rec);
+                tick(
+                    game,
+                    &Input {
+                        fire: true,
+                        ..Default::default()
+                    },
+                    &mut rec,
+                );
             }
-            "firehold" => {
-                step(game, &Input { fire: true, ..Default::default() }, secs("firehold"), &mut rec)
-            }
+            "firehold" => step(
+                game,
+                &Input {
+                    fire: true,
+                    ..Default::default()
+                },
+                secs("firehold"),
+                &mut rec,
+            ),
             "weapon" => {
                 let w = arg.parse::<u8>().expect("weapon wants 0..=3");
-                tick(game, &Input { select_weapon: Some(w), ..Default::default() }, &mut rec);
+                tick(
+                    game,
+                    &Input {
+                        select_weapon: Some(w),
+                        ..Default::default()
+                    },
+                    &mut rec,
+                );
             }
             "key" => {
                 // Drive the menu flow headlessly: key:up|down|enter|esc|any.
@@ -121,11 +153,23 @@ pub fn run(game: &mut Game, script: &str) {
             "type" => {
                 // Feed each character to the save-name text field, one per tic.
                 for c in arg.chars() {
-                    game.update(DT, &Input { typed: Some(c), ..Default::default() });
+                    game.update(
+                        DT,
+                        &Input {
+                            typed: Some(c),
+                            ..Default::default()
+                        },
+                    );
                 }
             }
             "backspace" => {
-                game.update(DT, &Input { backspace: true, ..Default::default() });
+                game.update(
+                    DT,
+                    &Input {
+                        backspace: true,
+                        ..Default::default()
+                    },
+                );
             }
             "wait" => step(game, &Input::default(), secs("wait"), &mut rec),
             "snap" => {
@@ -155,7 +199,11 @@ pub fn run(game: &mut Game, script: &str) {
             "teleport" => {
                 let parts: Vec<f32> = arg
                     .split(',')
-                    .map(|v| v.trim().parse().unwrap_or_else(|_| panic!("bad teleport argument in {cmd:?}")))
+                    .map(|v| {
+                        v.trim()
+                            .parse()
+                            .unwrap_or_else(|_| panic!("bad teleport argument in {cmd:?}"))
+                    })
                     .collect();
                 assert_eq!(parts.len(), 3, "teleport wants x,y,deg in {cmd:?}");
                 game.player.x = parts[0];
@@ -176,18 +224,25 @@ pub fn run(game: &mut Game, script: &str) {
                         .actors
                         .list
                         .iter()
-                        .filter(|a| !a.dead && crate::actors::line_clear(&game.world, px, py, a.x, a.y))
+                        .filter(|a| {
+                            !a.dead && crate::actors::line_clear(&game.world, px, py, a.x, a.y)
+                        })
                         .map(|a| ((a.x - px).powi(2) + (a.y - py).powi(2), a.x, a.y))
                         .min_by(|a, b| a.0.total_cmp(&b.0));
                     // Express the aim as this tic's turn_delta (rather than
                     // writing the angle directly), so a `record:` capture can
                     // replay the aiming purely from the input stream.
-                    let turn_delta = target
-                        .map_or(0.0, |(_, bx, by)| (by - py).atan2(bx - px) - game.player.angle);
+                    let turn_delta = target.map_or(0.0, |(_, bx, by)| {
+                        (by - py).atan2(bx - px) - game.player.angle
+                    });
                     // Hold fire while a target is in sight; idle otherwise.
                     tick(
                         game,
-                        &Input { fire: target.is_some(), turn_delta, ..Default::default() },
+                        &Input {
+                            fire: target.is_some(),
+                            turn_delta,
+                            ..Default::default()
+                        },
                         &mut rec,
                     );
                 }
@@ -240,7 +295,10 @@ pub fn run(game: &mut Game, script: &str) {
                 let (px, py) = (game.player.x, game.player.y);
                 for a in game.actors.list.iter().filter(|a| !a.dead) {
                     let d = ((a.x - px).powi(2) + (a.y - py).powi(2)).sqrt();
-                    println!("actor: {:?} at ({:.1}, {:.1}) dist {:.1}", a.kind, a.x, a.y, d);
+                    println!(
+                        "actor: {:?} at ({:.1}, {:.1}) dist {:.1}",
+                        a.kind, a.x, a.y, d
+                    );
                 }
             }
             "pos" => {
@@ -255,8 +313,7 @@ pub fn run(game: &mut Game, script: &str) {
                 for y in cy - 3..=cy + 3 {
                     let row: String = (cx - 5..=cx + 5)
                         .map(|x| {
-                            let t = game.world.level.plane0
-                                [y as usize * 64 + x as usize];
+                            let t = game.world.level.plane0[y as usize * 64 + x as usize];
                             match t {
                                 0 => "  . ".into(),
                                 90..=101 => format!(" D{t:02}"),
@@ -285,7 +342,11 @@ pub fn run(game: &mut Game, script: &str) {
     // A recording left open at script end is closed and written implicitly.
     if let Some((path, demo)) = rec.take() {
         demo.write_to(&path).expect("write demo file");
-        println!("endrecord: {} ({} tics, implicit at script end)", path.display(), demo.tics.len());
+        println!(
+            "endrecord: {} ({} tics, implicit at script end)",
+            path.display(),
+            demo.tics.len()
+        );
     }
 }
 

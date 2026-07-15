@@ -16,15 +16,28 @@ fn hold(game: &mut Game, input: &Input, secs: f32) {
 }
 
 fn turn(game: &mut Game, right: bool, degrees: f32) {
-    let input = Input { turn_left: !right, turn_right: right, ..Default::default() };
+    let input = Input {
+        turn_left: !right,
+        turn_right: right,
+        ..Default::default()
+    };
     hold(game, &input, degrees.to_radians() / TURN_SPEED);
 }
 
 /// Walk from the spawn, through the first door, and down to face the guard.
 fn approach_guard(game: &mut Game) {
-    let fwd = Input { forward: true, ..Default::default() };
+    let fwd = Input {
+        forward: true,
+        ..Default::default()
+    };
     hold(game, &fwd, 0.75); // up to the closed door
-    game.update(DT, &Input { use_door: true, ..Default::default() });
+    game.update(
+        DT,
+        &Input {
+            use_door: true,
+            ..Default::default()
+        },
+    );
     hold(game, &Input::default(), 1.2); // let it open
     hold(game, &fwd, 1.3); // into the room
     turn(game, true, 90.0); // face south
@@ -60,16 +73,29 @@ fn pistol_kills_guard() {
     assert_eq!(game.score, 0);
 
     // Empty most of a magazine into the guard.
-    hold(&mut game, &Input { fire: true, ..Default::default() }, 2.0);
+    hold(
+        &mut game,
+        &Input {
+            fire: true,
+            ..Default::default()
+        },
+        2.0,
+    );
     hold(&mut game, &Input::default(), 0.5);
 
-    assert!(game.score >= 100, "killing the guard should score >= 100, got {}", game.score);
+    assert!(
+        game.score >= 100,
+        "killing the guard should score >= 100, got {}",
+        game.score
+    );
 
     let dead_guard = game
         .actors
         .list
         .iter()
-        .find(|a| a.kind == Kind::Guard && a.dead && (a.x - 39.5).abs() < 2.0 && (a.y - 61.5).abs() < 2.0)
+        .find(|a| {
+            a.kind == Kind::Guard && a.dead && (a.x - 39.5).abs() < 2.0 && (a.y - 61.5).abs() < 2.0
+        })
         .expect("the guard should be dead");
     let (gx, gy) = (dead_guard.x.floor() as usize, dead_guard.y.floor() as usize);
 
@@ -88,13 +114,25 @@ fn ammo_decrements_and_stops_at_zero() {
     assert_eq!(game.ammo, 8);
 
     // A single tap fires exactly one pistol shot.
-    game.update(DT, &Input { fire: true, ..Default::default() });
+    game.update(
+        DT,
+        &Input {
+            fire: true,
+            ..Default::default()
+        },
+    );
     hold(&mut game, &Input::default(), 0.4);
     assert_eq!(game.ammo, 7, "one shot should spend one round");
 
     // Hold fire well past the magazine; ammo bottoms out at 0.
     for _ in 0..600 {
-        game.update(DT, &Input { fire: true, ..Default::default() });
+        game.update(
+            DT,
+            &Input {
+                fire: true,
+                ..Default::default()
+            },
+        );
         assert!(game.ammo >= 0, "ammo went negative");
     }
     assert_eq!(game.ammo, 0, "ammo should stop at zero");

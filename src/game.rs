@@ -3,19 +3,19 @@
 //! demo driver synthesizes it. Both run exactly the same code.
 
 use crate::actors::{Actors, Kind};
+use crate::assets::{self, MapSet, VSwap, VgaGraph};
 use crate::config::{self, Config, MAX_MOUSE_SENS, MAX_VIEW, MIN_VIEW, VIEW_STEP};
 use crate::demorec::Demo;
-use crate::assets::{self, MapSet, VSwap, VgaGraph};
-use crate::variant::{GameId, Variant};
 use crate::fb::Framebuffer;
 use crate::highscore::{self, HighScore};
 use crate::hud::{self, Hud, HudState, KEY_GOLD, KEY_SILVER, VIEW_H};
 use crate::inter::{self, InterGfx, Intermission, LevelStats, VictoryStats};
-use crate::menu::{self, Menu, MAIN_ITEMS};
+use crate::menu::{self, MAIN_ITEMS, Menu};
 use crate::raycast::{self, Bonus, ElevatorUse, Player, PushUse, World};
 use crate::savegame::{self, SaveError};
 use crate::sound as snd;
 use crate::text::TextScreen;
+use crate::variant::{GameId, Variant};
 
 /// Longest save-slot name the text field accepts (WL_MENU.C allowed 31; the
 /// menu font fits a bit fewer in the slot box).
@@ -150,7 +150,12 @@ impl Difficulty {
         }
     }
     fn from_index(i: usize) -> Self {
-        [Difficulty::Baby, Difficulty::Easy, Difficulty::Normal, Difficulty::Hard][i.min(3)]
+        [
+            Difficulty::Baby,
+            Difficulty::Easy,
+            Difficulty::Normal,
+            Difficulty::Hard,
+        ][i.min(3)]
     }
 }
 
@@ -234,10 +239,23 @@ fn compute_stats(world: &World, actors: &Actors) -> LevelStats {
     // kill total — otherwise 100% kills would be unreachable on that floor. (The
     // original's SpawnGhosts does `killtotal++`, an oversight that makes E3M10's
     // kill ratio cap below 100%; we intentionally deviate to keep the stat sane.)
-    let kill_total = actors.list.iter().filter(|a| !a.dead && !a.kind.is_ghost()).count() as i32;
+    let kill_total = actors
+        .list
+        .iter()
+        .filter(|a| !a.dead && !a.kind.is_ghost())
+        .count() as i32;
     let secret_total = world.level.plane1.iter().filter(|&&c| c == 98).count() as i32;
-    let treasure_total = world.statics.iter().filter(|s| is_treasure(s.bonus)).count() as i32;
-    LevelStats { kill_total, secret_total, treasure_total, ..Default::default() }
+    let treasure_total = world
+        .statics
+        .iter()
+        .filter(|s| is_treasure(s.bonus))
+        .count() as i32;
+    LevelStats {
+        kill_total,
+        secret_total,
+        treasure_total,
+        ..Default::default()
+    }
 }
 
 pub fn end_boss(level_idx: usize) -> Option<Kind> {
@@ -454,8 +472,12 @@ impl Game {
         let sod = variant.is_sod();
         let world = World::new_variant(maps.level(level_idx), sod);
         let player = raycast::find_spawn(&world.level);
-        let actors =
-            Actors::spawn_from_level_variant(&world.level, difficulty.skill(), variant.sprite_shift, sod);
+        let actors = Actors::spawn_from_level_variant(
+            &world.level,
+            difficulty.skill(),
+            variant.sprite_shift,
+            sod,
+        );
         let stats = compute_stats(&world, &actors);
         Self {
             variant,
@@ -600,8 +622,15 @@ impl Game {
     pub fn load_attract_demos(&mut self) {
         // Only replay demos recorded under the running variant — a WL6 demo's
         // map/RNG makes no sense under SOD and vice versa.
-        let want = if self.variant.is_sod() { crate::demorec::VAR_SOD } else { crate::demorec::VAR_WL6 };
-        self.demos = crate::demorec::load_all().into_iter().filter(|d| d.variant == want).collect();
+        let want = if self.variant.is_sod() {
+            crate::demorec::VAR_SOD
+        } else {
+            crate::demorec::VAR_WL6
+        };
+        self.demos = crate::demorec::load_all()
+            .into_iter()
+            .filter(|d| d.variant == want)
+            .collect();
     }
 
     /// Frame entry point: dispatch to the menu flow or the simulation.
@@ -675,7 +704,11 @@ impl Game {
     /// par (boss / secret floors).
     fn par_label(&self) -> String {
         let s = (self.variant.par_minutes(self.level_idx) * 60.0) as i32;
-        if s == 0 { "??:??".to_string() } else { format!("{:02}:{:02}", s / 60, s % 60) }
+        if s == 0 {
+            "??:??".to_string()
+        } else {
+            format!("{:02}:{:02}", s / 60, s % 60)
+        }
     }
 
     /// The floor an elevator leads to, per variant (WL_GAME.C GameLoop). WL6
@@ -717,7 +750,8 @@ impl Game {
             self.stats.secret_ratio(),
             self.stats.treasure_ratio(),
         ];
-        let (timeleft, bonus) = inter::compute_bonus(time_sec, par_sec, ratios[0], ratios[1], ratios[2]);
+        let (timeleft, bonus) =
+            inter::compute_bonus(time_sec, par_sec, ratios[0], ratios[1], ratios[2]);
         self.score += bonus; // GivePoints(bonus)
         self.accumulate_episode(); // feed the Victory averages (LevelRatios)
 
@@ -860,7 +894,11 @@ impl Game {
     /// WL_TEXT.C `EndText`: page through the current episode's end article.
     fn begin_endtext(&mut self) {
         // SOD is one campaign (a single end article); WL6 picks per episode.
-        let episode = if self.variant.is_sod() { 0 } else { self.level_idx / 10 };
+        let episode = if self.variant.is_sod() {
+            0
+        } else {
+            self.level_idx / 10
+        };
         let chunk = self.variant.gfx.end_art1 + episode;
         self.endtext = Some(TextScreen::new(&self.vga, chunk));
         self.endtext_page = 0;
@@ -1030,7 +1068,8 @@ impl Game {
     // --- Menu state machine (WL_MENU.C) ------------------------------------
 
     fn update_title(&mut self, dt: f32, input: &Input) {
-        if input.any_key || input.menu_enter || input.menu_up || input.menu_down || input.menu_back {
+        if input.any_key || input.menu_enter || input.menu_up || input.menu_down || input.menu_back
+        {
             self.enter_menu_from_attract();
             return;
         }
@@ -1075,12 +1114,7 @@ impl Game {
     /// feeding each recorded tic to the play simulation. Any key stops the demo
     /// and opens the main menu (WL_PLAY.C PlayDemo).
     fn update_attract(&mut self, dt: f32, input: &Input) {
-        if input.any_key
-            || input.menu_enter
-            || input.menu_back
-            || input.fire
-            || input.use_door
-        {
+        if input.any_key || input.menu_enter || input.menu_back || input.fire || input.use_door {
             self.enter_menu_from_attract();
             return;
         }
@@ -1112,7 +1146,7 @@ impl Game {
     /// framebuffer). Renders recompute the flags from scratch, so a later
     /// on-screen render of the same state is idempotent.
     fn mark_visibility(&mut self) {
-        let mut fb = self.attract_fb.take().unwrap_or_else(Framebuffer::new);
+        let mut fb = self.attract_fb.take().unwrap_or_default();
         self.render_world(&mut fb);
         self.attract_fb = Some(fb);
     }
@@ -1445,7 +1479,11 @@ impl Game {
     /// Serialize the whole live game to a versioned byte buffer.
     pub fn write_save(&self, name: &str) -> Vec<u8> {
         let mut w = savegame::Writer::new();
-        let var = if self.variant.is_sod() { savegame::VAR_SOD } else { savegame::VAR_WL6 };
+        let var = if self.variant.is_sod() {
+            savegame::VAR_SOD
+        } else {
+            savegame::VAR_WL6
+        };
         savegame::write_header(&mut w, name, self.level_idx, self.difficulty.skill(), var);
         w.put_f32(self.player.x);
         w.put_f32(self.player.y);
@@ -1478,7 +1516,11 @@ impl Game {
         let mut r = savegame::Reader::new(data);
         let header = savegame::read_header(&mut r)?;
         // Refuse a save made under the other variant (WL6 vs. SOD).
-        let want = if self.variant.is_sod() { savegame::VAR_SOD } else { savegame::VAR_WL6 };
+        let want = if self.variant.is_sod() {
+            savegame::VAR_SOD
+        } else {
+            savegame::VAR_WL6
+        };
         if header.variant != want {
             return Err(SaveError::CrossVariant);
         }
@@ -1554,8 +1596,11 @@ impl Game {
             self.diff_sel = (self.diff_sel + 1) % menu::NUM_DIFFICULTIES;
         }
         if input.menu_back {
-            self.screen =
-                if self.variant.has_episodes { GameScreen::Episode } else { GameScreen::MainMenu };
+            self.screen = if self.variant.has_episodes {
+                GameScreen::Episode
+            } else {
+                GameScreen::MainMenu
+            };
             return;
         }
         if input.menu_enter {
@@ -1627,7 +1672,11 @@ impl Game {
         }
         self.player.angle += input.turn_delta;
 
-        let speed = if input.run { MOVE_SPEED * RUN_FACTOR } else { MOVE_SPEED };
+        let speed = if input.run {
+            MOVE_SPEED * RUN_FACTOR
+        } else {
+            MOVE_SPEED
+        };
         let (dx, dy) = (self.player.angle.cos(), self.player.angle.sin());
         let mut mx = 0.0f32;
         let mut my = 0.0f32;
@@ -1984,7 +2033,8 @@ impl Game {
                 return;
             }
             GameScreen::Sound => {
-                self.menu.render_sound(fb, self.sfx_mode, self.music_on, self.sound_sel);
+                self.menu
+                    .render_sound(fb, self.sfx_mode, self.music_on, self.sound_sel);
                 return;
             }
             GameScreen::LoadGame => {
@@ -2024,7 +2074,17 @@ impl Game {
                 if !(vx == 0 && vy == 0 && vw == crate::fb::WIDTH && vh == VIEW_H) {
                     raycast::draw_play_border(fb, vx, vy, vw, vh, VIEW_H);
                 }
-                raycast::render(fb, &self.vswap, &self.world, &mut self.actors, &self.player, vx, vy, vw, vh);
+                raycast::render(
+                    fb,
+                    &self.vswap,
+                    &self.world,
+                    &mut self.actors,
+                    &self.player,
+                    vx,
+                    vy,
+                    vw,
+                    vh,
+                );
                 self.inter_gfx.draw_seeagain(fb);
                 return;
             }
@@ -2051,7 +2111,8 @@ impl Game {
             }
             GameScreen::HighScores | GameScreen::HighScoreEntry => {
                 let editing = self.hs_edit_slot.map(|s| (s, self.hs_name.as_str()));
-                self.inter_gfx.render_high_scores(fb, &self.highscores, editing);
+                self.inter_gfx
+                    .render_high_scores(fb, &self.highscores, editing);
                 return;
             }
             GameScreen::ReadThis => {
@@ -2062,7 +2123,9 @@ impl Game {
             }
             GameScreen::LevelSelect => {
                 let names = self.level_names.get_or_insert_with(|| {
-                    (0..self.maps.num_levels()).map(|i| self.maps.level(i).name).collect()
+                    (0..self.maps.num_levels())
+                        .map(|i| self.maps.level(i).name)
+                        .collect()
                 });
                 self.menu.render_level_select(fb, names, self.level_sel);
                 return;
@@ -2082,7 +2145,17 @@ impl Game {
         if !full {
             raycast::draw_play_border(fb, vx, vy, vw, vh, VIEW_H);
         }
-        raycast::render(fb, &self.vswap, &self.world, &mut self.actors, &self.player, vx, vy, vw, vh);
+        raycast::render(
+            fb,
+            &self.vswap,
+            &self.world,
+            &mut self.actors,
+            &self.player,
+            vx,
+            vy,
+            vw,
+            vh,
+        );
         // The firing animation offsets from the weapon's ready frame.
         let weapon_sprite = hud::weapon_ready_sprite(&self.vswap, self.weapon) + self.weapon_frame;
         hud::draw_weapon(fb, &self.vswap, weapon_sprite, vx, vy + vh, vw);

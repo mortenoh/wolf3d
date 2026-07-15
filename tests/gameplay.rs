@@ -18,14 +18,23 @@ fn walk_through_first_door() {
     assert_eq!(game.player.x, 29.5);
     assert_eq!(game.player.y, 57.5);
 
-    let forward = Input { forward: true, ..Default::default() };
+    let forward = Input {
+        forward: true,
+        ..Default::default()
+    };
 
     // Blocked by the closed door: walking never crosses x=32.
     step(&mut game, &forward, 2.0);
     assert!(game.player.x < 32.0, "walked through a closed door");
 
     // Open it (facing the adjacent tile) and it becomes passable.
-    game.update(DT, &Input { use_door: true, ..Default::default() });
+    game.update(
+        DT,
+        &Input {
+            use_door: true,
+            ..Default::default()
+        },
+    );
     step(&mut game, &Input::default(), 1.2);
     step(&mut game, &forward, 1.0);
     assert!(game.player.x > 33.0, "door did not open");
@@ -50,15 +59,39 @@ fn level_select_warps_and_preserves_stats() {
     game.screen = GameScreen::LevelSelect;
 
     // Esc backs out without changing the level.
-    game.update(DT, &Input { menu_back: true, ..Default::default() });
+    game.update(
+        DT,
+        &Input {
+            menu_back: true,
+            ..Default::default()
+        },
+    );
     assert_eq!(game.screen, GameScreen::Playing);
     assert_eq!(game.level_idx, 0);
 
     // Right one episode, down one floor, Enter: warp to E2 floor 2 (index 11).
     game.screen = GameScreen::LevelSelect;
-    game.update(DT, &Input { menu_right: true, ..Default::default() });
-    game.update(DT, &Input { menu_down: true, ..Default::default() });
-    game.update(DT, &Input { menu_enter: true, ..Default::default() });
+    game.update(
+        DT,
+        &Input {
+            menu_right: true,
+            ..Default::default()
+        },
+    );
+    game.update(
+        DT,
+        &Input {
+            menu_down: true,
+            ..Default::default()
+        },
+    );
+    game.update(
+        DT,
+        &Input {
+            menu_enter: true,
+            ..Default::default()
+        },
+    );
     assert_eq!(game.screen, GameScreen::Playing);
     assert_eq!(game.level_idx, 11);
     assert_eq!(game.score, 4200, "warp must keep stats");

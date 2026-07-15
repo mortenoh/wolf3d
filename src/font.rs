@@ -43,7 +43,12 @@ impl Font {
         for (c, w) in widths.iter_mut().enumerate() {
             *w = data[2 + 512 + c] as usize;
         }
-        Self { height, offsets, widths, data }
+        Self {
+            height,
+            offsets,
+            widths,
+            data,
+        }
     }
 
     pub fn height(&self) -> usize {

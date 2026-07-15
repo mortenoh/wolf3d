@@ -67,7 +67,9 @@ impl Gpu {
     fn new(window: Arc<Window>) -> Self {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let surface = instance.create_surface(window.clone()).expect("create surface");
+        let surface = instance
+            .create_surface(window.clone())
+            .expect("create surface");
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             compatible_surface: Some(&surface),
             ..Default::default()
@@ -173,7 +175,15 @@ impl Gpu {
             cache: None,
         });
 
-        Self { surface, device, queue, config, pipeline, bind_group, texture }
+        Self {
+            surface,
+            device,
+            queue,
+            config,
+            pipeline,
+            bind_group,
+            texture,
+        }
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -212,7 +222,9 @@ impl Gpu {
             }
             Cst::Timeout | Cst::Occluded | Cst::Validation => return,
         };
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -232,7 +244,11 @@ impl Gpu {
             // Letterbox to 4:3 (the game is 320x200 shown on a 4:3 monitor).
             let (ww, wh) = (self.config.width as f32, self.config.height as f32);
             let target = 4.0 / 3.0;
-            let (vw, vh) = if ww / wh > target { (wh * target, wh) } else { (ww, ww / target) };
+            let (vw, vh) = if ww / wh > target {
+                (wh * target, wh)
+            } else {
+                (ww, ww / target)
+            };
             pass.set_viewport((ww - vw) / 2.0, (wh - vh) / 2.0, vw, vh, 0.0, 1.0);
 
             pass.set_pipeline(&self.pipeline);
@@ -349,7 +365,11 @@ impl App {
         }
         if let Some(w) = &self.window {
             use winit::window::CursorGrabMode;
-            let mode = if want { CursorGrabMode::Locked } else { CursorGrabMode::None };
+            let mode = if want {
+                CursorGrabMode::Locked
+            } else {
+                CursorGrabMode::None
+            };
             // Locked is supported on macOS; fall back to Confined elsewhere.
             let ok = w
                 .set_cursor_grab(mode)
@@ -458,7 +478,11 @@ impl App {
                 let path = self.record_path.take().expect("record path present");
                 match d.write_to(&path) {
                     Ok(()) => {
-                        println!("WOLF3D_RECORD: wrote {} ({} tics)", path.display(), d.tics.len())
+                        println!(
+                            "WOLF3D_RECORD: wrote {} ({} tics)",
+                            path.display(),
+                            d.tics.len()
+                        )
                     }
                     Err(e) => eprintln!("WOLF3D_RECORD: failed to write demo: {e}"),
                 }
@@ -505,7 +529,9 @@ impl App {
         let level = self.game.level_idx;
         let sfx_mode = self.game.sfx_mode;
         let music_on = self.game.music_on;
-        let Some(backend) = &mut self.sound else { return };
+        let Some(backend) = &mut self.sound else {
+            return;
+        };
 
         // Apply Sound-menu changes to the backend only when they flip.
         if sfx_mode != self.applied_sfx_mode {
@@ -643,7 +669,10 @@ impl ApplicationHandler for App {
                                 // Toggle music through the game state so the
                                 // Sound menu and the shortcut stay in sync.
                                 self.game.music_on = !self.game.music_on;
-                                println!("music: {}", if self.game.music_on { "on" } else { "off" });
+                                println!(
+                                    "music: {}",
+                                    if self.game.music_on { "on" } else { "off" }
+                                );
                             }
                             KeyCode::KeyE => self.use_pressed = true,
                             KeyCode::Digit1 => self.weapon_pressed = Some(0),
@@ -838,5 +867,7 @@ fn main() {
 
     let event_loop = EventLoop::new().expect("event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop.run_app(&mut App::new(game, sound, record_path)).expect("run");
+    event_loop
+        .run_app(&mut App::new(game, sound, record_path))
+        .expect("run");
 }

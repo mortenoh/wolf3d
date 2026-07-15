@@ -19,8 +19,8 @@
 //! Text otherwise flows word-by-word with the small proportional font, wrapping
 //! at the right margin and honoring literal newlines and tabs.
 
-use crate::assets::vgagraph::Picture;
 use crate::assets::VgaGraph;
+use crate::assets::vgagraph::Picture;
 use crate::fb::{Framebuffer, HEIGHT, WIDTH};
 use crate::font::Font;
 
@@ -78,7 +78,12 @@ impl TextScreen {
         blit(fb, &self.top, 0, 0);
         blit(fb, &self.left, 0, 8);
         blit(fb, &self.right, WIDTH as i32 - self.right.width as i32, 8);
-        blit(fb, &self.bottom, 8, HEIGHT as i32 - self.bottom.height as i32);
+        blit(
+            fb,
+            &self.bottom,
+            8,
+            HEIGHT as i32 - self.bottom.height as i32,
+        );
 
         let Some(text) = self.pages.get(page.min(self.pages.len().saturating_sub(1))) else {
             return;
@@ -254,7 +259,12 @@ fn parse_numbers(bytes: &[u8]) -> (Vec<i32>, usize) {
         if i == start {
             break;
         }
-        nums.push(std::str::from_utf8(&bytes[start..i]).unwrap().parse().unwrap_or(0));
+        nums.push(
+            std::str::from_utf8(&bytes[start..i])
+                .unwrap()
+                .parse()
+                .unwrap_or(0),
+        );
         if i >= bytes.len() || bytes[i] != b',' {
             break;
         }
@@ -272,7 +282,8 @@ fn hexval(b: u8) -> u8 {
 }
 
 fn fill(fb: &mut Framebuffer, color: u8) {
-    fb.pixels.fill(crate::assets::palette::PALETTE[color as usize]);
+    fb.pixels
+        .fill(crate::assets::palette::PALETTE[color as usize]);
 }
 
 fn blit(fb: &mut Framebuffer, pic: &Picture, dx: i32, dy: i32) {

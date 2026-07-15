@@ -39,10 +39,20 @@ fn e3m9_spawns_mecha_hitler() {
         .find(|a| a.kind == Kind::MechaHitler)
         .expect("a mecha-Hitler actor should have spawned");
     assert!(!mecha.dead);
-    assert_eq!((mecha.x.floor() as usize, mecha.y.floor() as usize), (tx, ty));
+    assert_eq!(
+        (mecha.x.floor() as usize, mecha.y.floor() as usize),
+        (tx, ty)
+    );
 
     // Exactly one mecha; the real Hitler must not exist before the morph.
-    assert_eq!(game.actors.list.iter().filter(|a| a.kind == Kind::MechaHitler).count(), 1);
+    assert_eq!(
+        game.actors
+            .list
+            .iter()
+            .filter(|a| a.kind == Kind::MechaHitler)
+            .count(),
+        1
+    );
     assert!(game.actors.list.iter().all(|a| a.kind != Kind::Hitler));
 }
 
@@ -84,7 +94,10 @@ fn fight(game: &mut Game, kind: Kind, min_dist: f32, max_secs: f32, refills: &mu
             *refills += 1;
         }
         game.update(DT, &input);
-        assert!(!game.died, "the scripted player died fighting {kind:?}; tactics need adjusting");
+        assert!(
+            !game.died,
+            "the scripted player died fighting {kind:?}; tactics need adjusting"
+        );
     }
     panic!("{kind:?} survived {max_secs}s of chaingun fire");
 }
@@ -119,7 +132,10 @@ fn scripted_fight_kills_mecha_then_hitler_and_wins() {
     game.player.angle = -std::f32::consts::FRAC_PI_2; // face north
 
     let mut refills = 0u32;
-    assert!(fight(&mut game, Kind::MechaHitler, 6.0, 120.0, &mut refills), "mecha never died");
+    assert!(
+        fight(&mut game, Kind::MechaHitler, 6.0, 120.0, &mut refills),
+        "mecha never died"
+    );
     println!(
         "mecha down: health={} ammo={} refills={} score={}",
         game.health, game.ammo, refills, game.score
@@ -130,12 +146,28 @@ fn scripted_fight_kills_mecha_then_hitler_and_wins() {
     for _ in 0..35 {
         game.update(DT, &Input::default());
     }
-    let hitler_alive = game.actors.list.iter().any(|a| a.kind == Kind::Hitler && !a.dead);
-    assert!(hitler_alive, "the real Hitler should morph out of the dead mecha");
-    assert!(!game.victory, "killing only the mecha must not win the episode");
+    let hitler_alive = game
+        .actors
+        .list
+        .iter()
+        .any(|a| a.kind == Kind::Hitler && !a.dead);
+    assert!(
+        hitler_alive,
+        "the real Hitler should morph out of the dead mecha"
+    );
+    assert!(
+        !game.victory,
+        "killing only the mecha must not win the episode"
+    );
 
-    assert!(fight(&mut game, Kind::Hitler, 6.0, 120.0, &mut refills), "Hitler never died");
-    assert!(game.victory, "killing the real Hitler must set the victory flag");
+    assert!(
+        fight(&mut game, Kind::Hitler, 6.0, 120.0, &mut refills),
+        "Hitler never died"
+    );
+    assert!(
+        game.victory,
+        "killing the real Hitler must set the victory flag"
+    );
     println!(
         "hitler down: health={} ammo={} refills={} score={}",
         game.health, game.ammo, refills, game.score
@@ -183,12 +215,19 @@ fn e1_and_e2_bosses_spawn_with_hard_tier_hitpoints() {
 
     // E2M9 (index 18): Dr. Schabbs.
     let game = Game::new(18);
-    assert!(game.actors.list.iter().any(|a| a.kind == Kind::Schabbs), "E2M9 should spawn Schabbs");
+    assert!(
+        game.actors.list.iter().any(|a| a.kind == Kind::Schabbs),
+        "E2M9 should spawn Schabbs"
+    );
 
     // E3M9 also carries five fake Hitlers around the approach.
     let game = Game::new(28);
     assert_eq!(
-        game.actors.list.iter().filter(|a| a.kind == Kind::FakeHitler).count(),
+        game.actors
+            .list
+            .iter()
+            .filter(|a| a.kind == Kind::FakeHitler)
+            .count(),
         5,
         "E3M9 should spawn five fake Hitlers"
     );

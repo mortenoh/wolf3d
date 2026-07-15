@@ -155,7 +155,12 @@ impl VgaGraph {
             })
             .collect();
 
-        let mut vga = Self { dict, head, graph, pictable: Vec::new() };
+        let mut vga = Self {
+            dict,
+            head,
+            graph,
+            pictable: Vec::new(),
+        };
 
         // Chunk 0 (STRUCTPIC) is the pictable: pairs of i16 (width, height).
         let table = vga.expand_chunk(0);
@@ -218,7 +223,11 @@ impl VgaGraph {
                 pixels[y * width + x] = palette[byte as usize];
             }
         }
-        Picture { width, height, pixels }
+        Picture {
+            width,
+            height,
+            pixels,
+        }
     }
 
     /// Read a raw VGA palette chunk (768 bytes = 256 * RGB, 6-bit DAC values) into

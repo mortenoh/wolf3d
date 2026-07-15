@@ -115,7 +115,11 @@ impl Demo {
     /// advanced the simulation) so the RNG indices and camera match the run.
     pub fn begin(game: &Game) -> Self {
         Self {
-            variant: if game.variant.is_sod() { VAR_SOD } else { VAR_WL6 },
+            variant: if game.variant.is_sod() {
+                VAR_SOD
+            } else {
+                VAR_WL6
+            },
             level_idx: game.level_idx,
             difficulty: game.difficulty.skill(),
             rng_index: game.actors.rng_index(),
@@ -271,8 +275,16 @@ fn pack_input(w: &mut Writer, input: &Input) {
 
 fn unpack_input(r: &mut Reader) -> Result<Input, SaveError> {
     let flags = r.get_u16()?;
-    let select_weapon = if flags & F_HAS_WEAPON != 0 { Some(r.get_u8()?) } else { None };
-    let turn_delta = if flags & F_HAS_TURN_DELTA != 0 { r.get_f32()? } else { 0.0 };
+    let select_weapon = if flags & F_HAS_WEAPON != 0 {
+        Some(r.get_u8()?)
+    } else {
+        None
+    };
+    let turn_delta = if flags & F_HAS_TURN_DELTA != 0 {
+        r.get_f32()?
+    } else {
+        0.0
+    };
     Ok(Input {
         forward: flags & F_FORWARD != 0,
         back: flags & F_BACK != 0,
@@ -314,6 +326,10 @@ pub fn load_all() -> Vec<Demo> {
     paths.sort();
     paths
         .iter()
-        .filter_map(|p| std::fs::read(p).ok().and_then(|d| Demo::from_bytes(&d).ok()))
+        .filter_map(|p| {
+            std::fs::read(p)
+                .ok()
+                .and_then(|d| Demo::from_bytes(&d).ok())
+        })
         .collect()
 }

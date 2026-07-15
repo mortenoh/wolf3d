@@ -44,10 +44,12 @@ impl MapSet {
         let maphead = std::fs::read(dir.join(format!("MAPHEAD.{ext}")))?;
         let gamemaps = std::fs::read(dir.join(format!("GAMEMAPS.{ext}")))?;
         let rlew_tag = u16at(&maphead, 0);
-        let offsets = (0..NUM_MAPS)
-            .map(|i| i32at(&maphead, 2 + i * 4))
-            .collect();
-        Ok(Self { gamemaps, rlew_tag, offsets })
+        let offsets = (0..NUM_MAPS).map(|i| i32at(&maphead, 2 + i * 4)).collect();
+        Ok(Self {
+            gamemaps,
+            rlew_tag,
+            offsets,
+        })
     }
 
     pub fn num_levels(&self) -> usize {
@@ -80,7 +82,11 @@ impl MapSet {
         let plane1 = planes.pop().unwrap();
         let plane0 = planes.pop().unwrap();
         assert_eq!(plane0.len(), MAP_SIZE * MAP_SIZE);
-        Level { name, plane0, plane1 }
+        Level {
+            name,
+            plane0,
+            plane1,
+        }
     }
 
     /// Carmack-expand then RLEW-expand one plane blob into 64x64 words.

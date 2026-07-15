@@ -25,13 +25,23 @@ fn e3m10_spawns_four_ghosts() {
     // One spawn code of each kind sits in plane 1.
     for code in 224u16..=227 {
         assert_eq!(
-            game.world.level.plane1.iter().filter(|&&c| c == code).count(),
+            game.world
+                .level
+                .plane1
+                .iter()
+                .filter(|&&c| c == code)
+                .count(),
             1,
             "E3M10 plane 1 should hold exactly one ghost spawn code {code}"
         );
     }
     // And a live, ghost actor stands for each.
-    let ghosts = game.actors.list.iter().filter(|a| a.kind.is_ghost() && !a.dead).count();
+    let ghosts = game
+        .actors
+        .list
+        .iter()
+        .filter(|a| a.kind.is_ghost() && !a.dead)
+        .count();
     assert_eq!(ghosts, 4, "four ghost actors should spawn on E3M10");
 }
 
@@ -40,9 +50,18 @@ fn e3m10_spawns_four_ghosts() {
 #[test]
 fn ghosts_excluded_from_kill_total() {
     let game = Game::new(E3M10);
-    let ghosts = game.actors.list.iter().filter(|a| a.kind.is_ghost()).count();
-    let non_ghost_live =
-        game.actors.list.iter().filter(|a| !a.dead && !a.kind.is_ghost()).count() as i32;
+    let ghosts = game
+        .actors
+        .list
+        .iter()
+        .filter(|a| a.kind.is_ghost())
+        .count();
+    let non_ghost_live = game
+        .actors
+        .list
+        .iter()
+        .filter(|a| !a.dead && !a.kind.is_ghost())
+        .count() as i32;
     assert!(ghosts > 0, "there must be ghosts to exclude");
     assert_eq!(
         game.stats.kill_total, non_ghost_live,
@@ -82,7 +101,9 @@ fn ghost_cannot_be_shot() {
     game.player.y = gy;
     game.player.angle = 0.0;
 
-    let points = game.actors.player_fire(&game.world, game.player.x, game.player.y, 0.0, false);
+    let points = game
+        .actors
+        .player_fire(&game.world, game.player.x, game.player.y, 0.0, false);
     assert_eq!(points, 0, "shooting a ghost must score nothing");
     assert!(!game.actors.list[0].dead, "a ghost can never be killed");
 }

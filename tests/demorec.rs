@@ -28,12 +28,52 @@ fn record_fight() -> (Demo, Game) {
         }
     }
     // The demo-1 route: through the first door, then south into the guard room.
-    hold(&mut game, &mut demo, Input { forward: true, ..Default::default() }, 0.8);
-    tick(&mut game, &mut demo, Input { use_door: true, ..Default::default() });
+    hold(
+        &mut game,
+        &mut demo,
+        Input {
+            forward: true,
+            ..Default::default()
+        },
+        0.8,
+    );
+    tick(
+        &mut game,
+        &mut demo,
+        Input {
+            use_door: true,
+            ..Default::default()
+        },
+    );
     hold(&mut game, &mut demo, Input::default(), 0.9);
-    hold(&mut game, &mut demo, Input { forward: true, run: true, ..Default::default() }, 0.75);
-    hold(&mut game, &mut demo, Input { turn_right: true, ..Default::default() }, 0.65);
-    hold(&mut game, &mut demo, Input { forward: true, ..Default::default() }, 1.6);
+    hold(
+        &mut game,
+        &mut demo,
+        Input {
+            forward: true,
+            run: true,
+            ..Default::default()
+        },
+        0.75,
+    );
+    hold(
+        &mut game,
+        &mut demo,
+        Input {
+            turn_right: true,
+            ..Default::default()
+        },
+        0.65,
+    );
+    hold(
+        &mut game,
+        &mut demo,
+        Input {
+            forward: true,
+            ..Default::default()
+        },
+        1.6,
+    );
     // Auto-aimed fire at the nearest live guard, recorded as turn_delta.
     for _ in 0..(2.5 / DT) as u32 {
         let (px, py) = (game.player.x, game.player.y);
@@ -44,12 +84,17 @@ fn record_fight() -> (Demo, Game) {
             .filter(|a| !a.dead && wolf3d::actors::line_clear(&game.world, px, py, a.x, a.y))
             .map(|a| ((a.x - px).powi(2) + (a.y - py).powi(2), a.x, a.y))
             .min_by(|a, b| a.0.total_cmp(&b.0));
-        let turn_delta =
-            target.map_or(0.0, |(_, bx, by)| (by - py).atan2(bx - px) - game.player.angle);
+        let turn_delta = target.map_or(0.0, |(_, bx, by)| {
+            (by - py).atan2(bx - px) - game.player.angle
+        });
         tick(
             &mut game,
             &mut demo,
-            Input { fire: target.is_some(), turn_delta, ..Default::default() },
+            Input {
+                fire: target.is_some(),
+                turn_delta,
+                ..Default::default()
+            },
         );
     }
     hold(&mut game, &mut demo, Input::default(), 1.5);
@@ -59,13 +104,29 @@ fn record_fight() -> (Demo, Game) {
 /// Assert the full observable simulation state of two games is identical
 /// (player, stats, every actor, and the RNG cursor).
 fn assert_states_match(a: &Game, b: &Game) {
-    assert_eq!(a.player.x.to_bits(), b.player.x.to_bits(), "player x diverged");
-    assert_eq!(a.player.y.to_bits(), b.player.y.to_bits(), "player y diverged");
-    assert_eq!(a.player.angle.to_bits(), b.player.angle.to_bits(), "player angle diverged");
+    assert_eq!(
+        a.player.x.to_bits(),
+        b.player.x.to_bits(),
+        "player x diverged"
+    );
+    assert_eq!(
+        a.player.y.to_bits(),
+        b.player.y.to_bits(),
+        "player y diverged"
+    );
+    assert_eq!(
+        a.player.angle.to_bits(),
+        b.player.angle.to_bits(),
+        "player angle diverged"
+    );
     assert_eq!(a.health, b.health, "health diverged");
     assert_eq!(a.ammo, b.ammo, "ammo diverged");
     assert_eq!(a.score, b.score, "score diverged");
-    assert_eq!(a.actors.rng_index(), b.actors.rng_index(), "rng index diverged");
+    assert_eq!(
+        a.actors.rng_index(),
+        b.actors.rng_index(),
+        "rng index diverged"
+    );
     assert_eq!(a.actors.list.len(), b.actors.list.len());
     for (i, (x, y)) in a.actors.list.iter().zip(&b.actors.list).enumerate() {
         assert_eq!(x.x.to_bits(), y.x.to_bits(), "actor {i} x diverged");
@@ -121,7 +182,11 @@ fn replay_reproduces_recorded_run_exactly() {
         replay.update(DT, &Input::default());
         replay.render(&mut fb);
     }
-    assert_eq!(replay.screen, GameScreen::Attract, "demo should still be playing");
+    assert_eq!(
+        replay.screen,
+        GameScreen::Attract,
+        "demo should still be playing"
+    );
     assert_states_match(&recorded, &replay);
 
     // The tic after the last recorded input ends the demo -> back to the title.
@@ -139,8 +204,18 @@ fn any_key_stops_demo_playback() {
     game.start_attract_demo(&game.demos[0].clone());
     assert_eq!(game.screen, GameScreen::Attract);
 
-    game.update(DT, &Input { any_key: true, ..Default::default() });
-    assert_eq!(game.screen, GameScreen::MainMenu, "a key during the demo opens the menu");
+    game.update(
+        DT,
+        &Input {
+            any_key: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        game.screen,
+        GameScreen::MainMenu,
+        "a key during the demo opens the menu"
+    );
     assert!(!game.attract_mode, "the attract loop stops on a key");
 }
 
@@ -163,13 +238,25 @@ fn attract_loop_cycles_title_credits_scores_demo_title() {
         }
     };
     step_past(&mut game, ATTRACT_TITLE_SECS);
-    assert_eq!(game.screen, GameScreen::Credits, "title should advance to credits");
+    assert_eq!(
+        game.screen,
+        GameScreen::Credits,
+        "title should advance to credits"
+    );
 
     step_past(&mut game, ATTRACT_CREDITS_SECS);
-    assert_eq!(game.screen, GameScreen::HighScores, "credits should advance to scores");
+    assert_eq!(
+        game.screen,
+        GameScreen::HighScores,
+        "credits should advance to scores"
+    );
 
     step_past(&mut game, ATTRACT_SCORES_SECS);
-    assert_eq!(game.screen, GameScreen::Attract, "scores should advance to demo playback");
+    assert_eq!(
+        game.screen,
+        GameScreen::Attract,
+        "scores should advance to demo playback"
+    );
 
     // The demo runs to completion and loops back to the title.
     let mut guard = 0;
@@ -178,7 +265,11 @@ fn attract_loop_cycles_title_credits_scores_demo_title() {
         guard += 1;
         assert!(guard < 20_000, "demo never finished");
     }
-    assert_eq!(game.screen, GameScreen::Title, "a finished demo loops back to the title");
+    assert_eq!(
+        game.screen,
+        GameScreen::Title,
+        "a finished demo loops back to the title"
+    );
     assert!(game.attract_mode);
 }
 
@@ -199,28 +290,62 @@ fn attract_loop_skips_demo_stage_when_no_demos() {
     step_past(&mut game, ATTRACT_CREDITS_SECS);
     assert_eq!(game.screen, GameScreen::HighScores);
     step_past(&mut game, ATTRACT_SCORES_SECS);
-    assert_eq!(game.screen, GameScreen::Title, "no demos: scores loop straight to the title");
+    assert_eq!(
+        game.screen,
+        GameScreen::Title,
+        "no demos: scores loop straight to the title"
+    );
 }
 
 #[test]
 fn any_key_during_attract_screens_opens_menu() {
     let mut game = Game::new(0);
     game.to_title();
-    game.update(DT, &Input { any_key: true, ..Default::default() });
-    assert_eq!(game.screen, GameScreen::MainMenu, "a key on the title opens the menu");
+    game.update(
+        DT,
+        &Input {
+            any_key: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        game.screen,
+        GameScreen::MainMenu,
+        "a key on the title opens the menu"
+    );
     assert!(!game.attract_mode);
 
     // Credits page.
     game.to_title();
     game.screen = GameScreen::Credits;
-    game.update(DT, &Input { any_key: true, ..Default::default() });
-    assert_eq!(game.screen, GameScreen::MainMenu, "a key on the credits opens the menu");
+    game.update(
+        DT,
+        &Input {
+            any_key: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        game.screen,
+        GameScreen::MainMenu,
+        "a key on the credits opens the menu"
+    );
 
     // High scores during attract.
     game.to_title();
     game.screen = GameScreen::HighScores;
-    game.update(DT, &Input { any_key: true, ..Default::default() });
-    assert_eq!(game.screen, GameScreen::MainMenu, "a key on the scores opens the menu");
+    game.update(
+        DT,
+        &Input {
+            any_key: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        game.screen,
+        GameScreen::MainMenu,
+        "a key on the scores opens the menu"
+    );
     assert!(!game.attract_mode);
 }
 
@@ -231,10 +356,23 @@ fn back_to_demo_menu_entry_returns_to_title() {
     game.started = false;
     game.attract_mode = false;
     game.main_sel = wolf3d::menu::ITEM_BACKTODEMO;
-    assert!(game.main_item_active(wolf3d::menu::ITEM_BACKTODEMO), "Back to Demo is wired up");
+    assert!(
+        game.main_item_active(wolf3d::menu::ITEM_BACKTODEMO),
+        "Back to Demo is wired up"
+    );
 
-    game.update(DT, &Input { menu_enter: true, ..Default::default() });
-    assert_eq!(game.screen, GameScreen::Title, "Back to Demo returns to the title");
+    game.update(
+        DT,
+        &Input {
+            menu_enter: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        game.screen,
+        GameScreen::Title,
+        "Back to Demo returns to the title"
+    );
     assert!(game.attract_mode, "and restarts the attract loop");
 }
 
@@ -243,7 +381,10 @@ fn back_to_demo_menu_entry_returns_to_title() {
 #[test]
 fn shipped_demos_load_and_replay() {
     let demos = demorec::load_all();
-    assert!(!demos.is_empty(), "demos/ should ship at least one attract demo");
+    assert!(
+        !demos.is_empty(),
+        "demos/ should ship at least one attract demo"
+    );
     for demo in &demos {
         assert!(!demo.windowed, "shipped demos are headless recordings");
         assert!(!demo.tics.is_empty());

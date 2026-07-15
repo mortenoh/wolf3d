@@ -73,7 +73,12 @@ impl VSwap {
 
         let digi = load_digi(&data, num_chunks, sound_start);
 
-        Ok(Self { walls, sprites, sprite_start, digi })
+        Ok(Self {
+            walls,
+            sprites,
+            sprite_start,
+            digi,
+        })
     }
 
     /// The door face texture pair starts 8 chunks before the sprites.
@@ -93,9 +98,8 @@ fn load_digi(data: &[u8], num_chunks: usize, sound_start: usize) -> Vec<Vec<u8>>
     if num_chunks == 0 || sound_start >= num_chunks {
         return Vec::new();
     }
-    let u32at = |i: usize| {
-        u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize
-    };
+    let u32at =
+        |i: usize| u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]) as usize;
     let u16at = |i: usize| u16::from_le_bytes([data[i], data[i + 1]]) as usize;
     // Per-chunk file offset table (u32) and length table (u16) live back to back.
     let chunk_off = |c: usize| u32at(6 + c * 4);

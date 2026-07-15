@@ -39,13 +39,22 @@ fn unique_save_dir() -> (MutexGuard<'static, ()>, std::path::PathBuf) {
 // --- Input helpers -----------------------------------------------------------
 
 fn any() -> Input {
-    Input { any_key: true, ..Default::default() }
+    Input {
+        any_key: true,
+        ..Default::default()
+    }
 }
 fn enter() -> Input {
-    Input { menu_enter: true, ..Default::default() }
+    Input {
+        menu_enter: true,
+        ..Default::default()
+    }
 }
 fn esc() -> Input {
-    Input { menu_back: true, ..Default::default() }
+    Input {
+        menu_back: true,
+        ..Default::default()
+    }
 }
 
 /// Point-blank-kill the floor's end boss under god mode: keep only the boss,
@@ -81,7 +90,13 @@ fn kill_end_boss(game: &mut Game, kind: Kind) {
             return;
         };
         game.player.angle = (ty - game.player.y).atan2(tx - game.player.x);
-        game.update(DT, &Input { fire: true, ..Default::default() });
+        game.update(
+            DT,
+            &Input {
+                fire: true,
+                ..Default::default()
+            },
+        );
     }
     panic!("{kind:?} survived 30s of point-blank chaingun fire");
 }
@@ -116,7 +131,14 @@ fn high_score_table_sorts_qualifies_and_roundtrips() {
     highscore::store(&t).expect("store high scores");
     let loaded = highscore::load();
     assert_eq!(loaded.len(), highscore::MAX_SCORES);
-    assert_eq!(loaded[0], HighScore { name: "B.J.".to_string(), score: 50000, completed: 5 });
+    assert_eq!(
+        loaded[0],
+        HighScore {
+            name: "B.J.".to_string(),
+            score: 50000,
+            completed: 5
+        }
+    );
     // The 10000s remain below the 50000, still sorted.
     assert!(loaded[1].score <= loaded[0].score);
 }
@@ -155,16 +177,28 @@ fn killing_hans_runs_deathcam_victory_endtext_and_highscore_entry() {
         guard += 1;
         assert!(guard < 50, "end article never finished paging");
     }
-    assert_eq!(game.screen, GameScreen::HighScoreEntry, "a top score enters a name");
+    assert_eq!(
+        game.screen,
+        GameScreen::HighScoreEntry,
+        "a top score enters a name"
+    );
 
     // Type a name and confirm it.
     for c in "BJ BLAZKOWICZ".chars() {
-        game.update(DT, &Input { typed: Some(c), ..Default::default() });
+        game.update(
+            DT,
+            &Input {
+                typed: Some(c),
+                ..Default::default()
+            },
+        );
     }
     game.update(DT, &enter());
     assert_eq!(game.screen, GameScreen::HighScores);
     assert!(
-        game.highscores.iter().any(|e| e.name == "BJ BLAZKOWICZ" && e.score == 1_000_000),
+        game.highscores
+            .iter()
+            .any(|e| e.name == "BJ BLAZKOWICZ" && e.score == 1_000_000),
         "the entered name and score land on the board"
     );
 
@@ -176,7 +210,10 @@ fn killing_hans_runs_deathcam_victory_endtext_and_highscore_entry() {
     // Dismissing the board after a victory returns to the title.
     game.update(DT, &any());
     assert_eq!(game.screen, GameScreen::Title);
-    assert!(!game.victory, "the victory flag clears on the way back to the title");
+    assert!(
+        !game.victory,
+        "the victory flag clears on the way back to the title"
+    );
 }
 
 // --- Read This! help ---------------------------------------------------------
@@ -239,7 +276,13 @@ fn generate_snapshots() {
         game.update(DT, &any());
     }
     for c in "BJ BLAZKOWICZ".chars() {
-        game.update(DT, &Input { typed: Some(c), ..Default::default() });
+        game.update(
+            DT,
+            &Input {
+                typed: Some(c),
+                ..Default::default()
+            },
+        );
     }
     snap(&mut game, &mut fb, "highscore_entry");
     game.update(DT, &enter());

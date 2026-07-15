@@ -33,7 +33,10 @@ fn unique_save_dir() -> (MutexGuard<'static, ()>, std::path::PathBuf) {
 /// Drive a firefight on E1M1: point the player at the guards and hold fire. The
 /// enemies react, move and shoot back, so the world state churns every tic.
 fn run_fight(game: &mut Game, tics: usize) {
-    let fire = Input { fire: true, ..Default::default() };
+    let fire = Input {
+        fire: true,
+        ..Default::default()
+    };
     for _ in 0..tics {
         // Aim at the nearest live enemy each tic so shots actually land and the
         // fight stays lively (mirrors the demo's aimfire helper).
@@ -150,18 +153,30 @@ fn empty_and_corrupt_slots() {
 
     // Nothing written yet: every slot is empty.
     for slot in 0..savegame::NUM_SLOTS {
-        assert!(savegame::read_slot_header(slot).is_none(), "slot {slot} should be empty");
+        assert!(
+            savegame::read_slot_header(slot).is_none(),
+            "slot {slot} should be empty"
+        );
     }
 
     // A file that is not a save is treated as an empty slot, not a crash.
     std::fs::write(savegame::slot_path(2), b"not a save file at all").expect("write junk");
-    assert!(savegame::read_slot_header(2).is_none(), "corrupt slot reads as empty");
+    assert!(
+        savegame::read_slot_header(2).is_none(),
+        "corrupt slot reads as empty"
+    );
 
     // Applying corrupt bytes to a game surfaces an error and leaves it intact.
     let mut game = Game::new(0);
     let before_level = game.level_idx;
-    assert!(game.apply_save(b"WOLF3DSVxx").is_err(), "bad data must error");
-    assert_eq!(game.level_idx, before_level, "a failed load must not mutate the game");
+    assert!(
+        game.apply_save(b"WOLF3DSVxx").is_err(),
+        "bad data must error"
+    );
+    assert_eq!(
+        game.level_idx, before_level,
+        "a failed load must not mutate the game"
+    );
 
     // One real save makes exactly that slot non-empty.
     game.save_to_slot(5, "Only Five").expect("save");

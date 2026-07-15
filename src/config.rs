@@ -93,7 +93,13 @@ impl Config {
         let sfx_mode = r.get_u8()?;
         let music_on = r.get_bool()?;
         let mouse_sensitivity = r.get_u32()? as usize;
-        Ok(Config { view_size, sfx_mode, music_on, mouse_sensitivity }.sanitize())
+        Ok(Config {
+            view_size,
+            sfx_mode,
+            music_on,
+            mouse_sensitivity,
+        }
+        .sanitize())
     }
 }
 

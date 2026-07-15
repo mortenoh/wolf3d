@@ -8,9 +8,9 @@
 //! bonus itself is awarded up front by the caller, so skipping the animation
 //! (any key) never changes the total.
 
+use crate::assets::VgaGraph;
 use crate::assets::palette::PALETTE;
 use crate::assets::vgagraph::{self, Picture};
-use crate::assets::VgaGraph;
 use crate::fb::{Framebuffer, HEIGHT, WIDTH};
 use crate::font::Font;
 use crate::highscore::HighScore;
@@ -134,7 +134,11 @@ pub struct VictoryStats {
 /// `timeleft` is the seconds under par (0 when at/over par or the level has no
 /// par). Returns `(timeleft, total_bonus)`.
 pub fn compute_bonus(time_sec: i32, par_sec: i32, kr: i32, sr: i32, tr: i32) -> (i32, i32) {
-    let timeleft = if par_sec > 0 && time_sec < par_sec { par_sec - time_sec } else { 0 };
+    let timeleft = if par_sec > 0 && time_sec < par_sec {
+        par_sec - time_sec
+    } else {
+        0
+    };
     let bonus = timeleft * PAR_AMOUNT
         + PERCENT100AMT * (kr == 100) as i32
         + PERCENT100AMT * (sr == 100) as i32
@@ -276,7 +280,12 @@ impl InterGfx {
     /// Overlay the deathcam caption (WL_ACT2.C `Write(0,7,STR_SEEAGAIN)`).
     pub fn draw_seeagain(&self, fb: &mut Framebuffer) {
         self.font.draw_centered(fb, 8, "LET'S SEE THAT AGAIN", 0x13);
-        self.font.draw_centered(fb, 8 + self.font.height() as i32 + 2, "IN SLOW MOTION...", 0x13);
+        self.font.draw_centered(
+            fb,
+            8 + self.font.height() as i32 + 2,
+            "IN SLOW MOTION...",
+            0x13,
+        );
     }
 
     /// WL_INTER.C `Victory`: the blue backdrop, the victorious BJ pic, the
@@ -347,7 +356,8 @@ impl InterGfx {
 
         self.font.draw(fb, 14 * 8, 2 * 8, "Floor", 0x17);
         self.font.draw(fb, 14 * 8, 4 * 8, "Completed", 0x17);
-        self.font.draw(fb, 26 * 8, 2 * 8, &it.floor.to_string(), 0x17);
+        self.font
+            .draw(fb, 26 * 8, 2 * 8, &it.floor.to_string(), 0x17);
 
         // BONUS (right-aligned to cell 36).
         self.font.draw(fb, 14 * 8, 7 * 8, "Bonus", 0x17);

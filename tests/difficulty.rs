@@ -22,10 +22,19 @@ fn harder_skills_spawn_more_enemies() {
     // Baby and easy share the base placement set; medium adds the +36/+18
     // codes, hard adds another tier — a strict increase at each threshold.
     assert_eq!(baby, easy, "baby and easy share the base enemy set");
-    assert!(normal > easy, "medium skill adds enemies (got easy={easy}, normal={normal})");
-    assert!(hard > normal, "hard skill adds enemies (got normal={normal}, hard={hard})");
+    assert!(
+        normal > easy,
+        "medium skill adds enemies (got easy={easy}, normal={normal})"
+    );
+    assert!(
+        hard > normal,
+        "hard skill adds enemies (got normal={normal}, hard={hard})"
+    );
 
     // Sanity: the default Game::new spawns at hard (all tiers), matching the
     // enemy set the existing combat/boss tests rely on.
-    assert_eq!(Game::new(0).actors.list.iter().filter(|a| !a.dead).count(), hard);
+    assert_eq!(
+        Game::new(0).actors.list.iter().filter(|a| !a.dead).count(),
+        hard
+    );
 }

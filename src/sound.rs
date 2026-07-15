@@ -131,18 +131,93 @@ pub const MISSILEHITSND: usize = 86;
 
 /// Human-readable names for the sound enum, for headless logging.
 const NAMES: [&str; NUM_SOUNDS] = [
-    "HITWALL", "SELECTWPN", "SELECTITEM", "HEARTBEAT", "MOVEGUN2", "MOVEGUN1", "NOWAY",
-    "NAZIHITPLAYER", "SCHABBSTHROW", "PLAYERDEATH", "DOGDEATH", "ATKGATLING", "GETKEY",
-    "NOITEM", "WALK1", "WALK2", "TAKEDAMAGE", "GAMEOVER", "OPENDOOR", "CLOSEDOOR", "DONOTHING",
-    "HALT", "DEATHSCREAM2", "ATKKNIFE", "ATKPISTOL", "DEATHSCREAM3", "ATKMACHINEGUN", "HITENEMY",
-    "SHOOTDOOR", "DEATHSCREAM1", "GETMACHINE", "GETAMMO", "SHOOT", "HEALTH1", "HEALTH2", "BONUS1",
-    "BONUS2", "BONUS3", "GETGATLING", "ESCPRESSED", "LEVELDONE", "DOGBARK", "ENDBONUS1",
-    "ENDBONUS2", "BONUS1UP", "BONUS4", "PUSHWALL", "NOBONUS", "PERCENT100", "BOSSACTIVE", "MUTTI",
-    "SCHUTZAD", "AHHHG", "DIE", "EVA", "GUTENTAG", "LEBEN", "SCHEIST", "NAZIFIRE", "BOSSFIRE",
-    "SSFIRE", "SLURPIE", "TOT_HUND", "MEINGOTT", "SCHABBSHA", "HITLERHA", "SPION", "NEINSOVAS",
-    "DOGATTACK", "FLAMETHROWER", "MECHSTEP", "GOOBS", "YEAH", "DEATHSCREAM4", "DEATHSCREAM5",
-    "DEATHSCREAM6", "DEATHSCREAM7", "DEATHSCREAM8", "DEATHSCREAM9", "DONNER", "EINE", "ERLAUBEN",
-    "KEIN", "MEIN", "ROSE", "MISSILEFIRE", "MISSILEHIT",
+    "HITWALL",
+    "SELECTWPN",
+    "SELECTITEM",
+    "HEARTBEAT",
+    "MOVEGUN2",
+    "MOVEGUN1",
+    "NOWAY",
+    "NAZIHITPLAYER",
+    "SCHABBSTHROW",
+    "PLAYERDEATH",
+    "DOGDEATH",
+    "ATKGATLING",
+    "GETKEY",
+    "NOITEM",
+    "WALK1",
+    "WALK2",
+    "TAKEDAMAGE",
+    "GAMEOVER",
+    "OPENDOOR",
+    "CLOSEDOOR",
+    "DONOTHING",
+    "HALT",
+    "DEATHSCREAM2",
+    "ATKKNIFE",
+    "ATKPISTOL",
+    "DEATHSCREAM3",
+    "ATKMACHINEGUN",
+    "HITENEMY",
+    "SHOOTDOOR",
+    "DEATHSCREAM1",
+    "GETMACHINE",
+    "GETAMMO",
+    "SHOOT",
+    "HEALTH1",
+    "HEALTH2",
+    "BONUS1",
+    "BONUS2",
+    "BONUS3",
+    "GETGATLING",
+    "ESCPRESSED",
+    "LEVELDONE",
+    "DOGBARK",
+    "ENDBONUS1",
+    "ENDBONUS2",
+    "BONUS1UP",
+    "BONUS4",
+    "PUSHWALL",
+    "NOBONUS",
+    "PERCENT100",
+    "BOSSACTIVE",
+    "MUTTI",
+    "SCHUTZAD",
+    "AHHHG",
+    "DIE",
+    "EVA",
+    "GUTENTAG",
+    "LEBEN",
+    "SCHEIST",
+    "NAZIFIRE",
+    "BOSSFIRE",
+    "SSFIRE",
+    "SLURPIE",
+    "TOT_HUND",
+    "MEINGOTT",
+    "SCHABBSHA",
+    "HITLERHA",
+    "SPION",
+    "NEINSOVAS",
+    "DOGATTACK",
+    "FLAMETHROWER",
+    "MECHSTEP",
+    "GOOBS",
+    "YEAH",
+    "DEATHSCREAM4",
+    "DEATHSCREAM5",
+    "DEATHSCREAM6",
+    "DEATHSCREAM7",
+    "DEATHSCREAM8",
+    "DEATHSCREAM9",
+    "DONNER",
+    "EINE",
+    "ERLAUBEN",
+    "KEIN",
+    "MEIN",
+    "ROSE",
+    "MISSILEFIRE",
+    "MISSILEHIT",
 ];
 
 /// A short name for a sound-enum id, for the headless sound log.
@@ -198,9 +273,30 @@ pub const MENU_SONG: usize = WONDERIN_MUS;
 /// floor within an episode indexes into its jukebox group here — E1 floor 1 is
 /// "Get Them", etc.
 const JUKEBOX: [[usize; 6]; 3] = [
-    [GETTHEM_MUS, SEARCHN_MUS, POW_MUS, SUSPENSE_MUS, WARMARCH_MUS, CORNER_MUS],
-    [NAZI_OMI_MUS, PREGNANT_MUS, GOINGAFT_MUS, HEADACHE_MUS, DUNGEON_MUS, ULTIMATE_MUS],
-    [INTROCW3_MUS, NAZI_RAP_MUS, TWELFTH_MUS, ZEROHOUR_MUS, ULTIMATE_MUS, PACMAN_MUS],
+    [
+        GETTHEM_MUS,
+        SEARCHN_MUS,
+        POW_MUS,
+        SUSPENSE_MUS,
+        WARMARCH_MUS,
+        CORNER_MUS,
+    ],
+    [
+        NAZI_OMI_MUS,
+        PREGNANT_MUS,
+        GOINGAFT_MUS,
+        HEADACHE_MUS,
+        DUNGEON_MUS,
+        ULTIMATE_MUS,
+    ],
+    [
+        INTROCW3_MUS,
+        NAZI_RAP_MUS,
+        TWELFTH_MUS,
+        ZEROHOUR_MUS,
+        ULTIMATE_MUS,
+        PACMAN_MUS,
+    ],
 ];
 
 /// The music track for an overall level index (episode*10 + floor).
@@ -225,7 +321,12 @@ pub struct SoundAssets {
 
 impl SoundAssets {
     pub fn new(audio: AudioData, digi: Vec<Vec<u8>>) -> Self {
-        Self { sfx: audio.sfx, music: audio.music, digi, digi_map: audio.digi_map }
+        Self {
+            sfx: audio.sfx,
+            music: audio.music,
+            digi,
+            digi_map: audio.digi_map,
+        }
     }
 
     pub fn num_music(&self) -> usize {
@@ -328,7 +429,8 @@ impl Engine {
     /// Start (or restart) a music track; `None` stops the music.
     pub fn play_music(&mut self, track: Option<usize>) {
         self.all_notes_off();
-        self.music_track = track.filter(|&t| t < self.assets.music.len() && !self.assets.music[t].is_empty());
+        self.music_track =
+            track.filter(|&t| t < self.assets.music.len() && !self.assets.music[t].is_empty());
         self.music_ptr = 0;
         self.music_wait = 0.0;
         self.music_accum = 0.0;
@@ -429,7 +531,9 @@ impl Engine {
 
     /// One 700 Hz music service tick (SDL_ALService).
     fn music_service(&mut self) {
-        let Some(track) = self.music_track else { return };
+        let Some(track) = self.music_track else {
+            return;
+        };
         let data = &self.assets.music[track];
         if data.len() < 4 {
             return;
@@ -589,7 +693,11 @@ pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
 }
 
 /// Write mono `samples` to `path` as a 16-bit PCM WAV.
-pub fn write_wav(path: impl AsRef<std::path::Path>, samples: &[f32], sample_rate: u32) -> std::io::Result<()> {
+pub fn write_wav(
+    path: impl AsRef<std::path::Path>,
+    samples: &[f32],
+    sample_rate: u32,
+) -> std::io::Result<()> {
     std::fs::write(path, encode_wav(samples, sample_rate))
 }
 
@@ -657,17 +765,31 @@ impl Backend {
             cpal::SampleFormat::F32 => {
                 build_stream::<f32>(&device, &config, channels, engine, rx, |m| m)?
             }
-            cpal::SampleFormat::I16 => build_stream::<i16>(&device, &config, channels, engine, rx, |m| {
-                (m.clamp(-1.0, 1.0) * 32767.0) as i16
-            })?,
-            cpal::SampleFormat::U16 => build_stream::<u16>(&device, &config, channels, engine, rx, |m| {
-                ((m.clamp(-1.0, 1.0) * 0.5 + 0.5) * 65535.0) as u16
-            })?,
-            other => return Err(AudioError::NoConfig(format!("unsupported sample format {other:?}"))),
+            cpal::SampleFormat::I16 => {
+                build_stream::<i16>(&device, &config, channels, engine, rx, |m| {
+                    (m.clamp(-1.0, 1.0) * 32767.0) as i16
+                })?
+            }
+            cpal::SampleFormat::U16 => {
+                build_stream::<u16>(&device, &config, channels, engine, rx, |m| {
+                    ((m.clamp(-1.0, 1.0) * 0.5 + 0.5) * 65535.0) as u16
+                })?
+            }
+            other => {
+                return Err(AudioError::NoConfig(format!(
+                    "unsupported sample format {other:?}"
+                )));
+            }
         };
 
-        stream.play().map_err(|e| AudioError::Stream(e.to_string()))?;
-        Ok(Backend { _stream: stream, tx, music_enabled: true })
+        stream
+            .play()
+            .map_err(|e| AudioError::Stream(e.to_string()))?;
+        Ok(Backend {
+            _stream: stream,
+            tx,
+            music_enabled: true,
+        })
     }
 
     // (stream construction helper is the free function `build_stream` below)

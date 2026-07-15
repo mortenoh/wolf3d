@@ -105,8 +105,16 @@ impl Hud {
 
     /// DrawKeys: gold slot (top), silver slot (bottom); blank when not held.
     fn keys(&self, fb: &mut Framebuffer, keys: u8) {
-        let gold = if keys & KEY_GOLD != 0 { &self.gold_key } else { &self.no_key };
-        let silver = if keys & KEY_SILVER != 0 { &self.silver_key } else { &self.no_key };
+        let gold = if keys & KEY_GOLD != 0 {
+            &self.gold_key
+        } else {
+            &self.no_key
+        };
+        let silver = if keys & KEY_SILVER != 0 {
+            &self.silver_key
+        } else {
+            &self.no_key
+        };
         blit(fb, gold, 30 * CELL, 4 + BAR_TOP);
         blit(fb, silver, 30 * CELL, 20 + BAR_TOP);
     }

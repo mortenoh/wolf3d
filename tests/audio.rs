@@ -3,7 +3,7 @@
 //! render. Nothing here opens an audio device.
 
 use wolf3d::assets::audio::{AudioData, NUM_MUSIC, NUM_SOUNDS};
-use wolf3d::assets::{data_dir, VSwap};
+use wolf3d::assets::{VSwap, data_dir};
 use wolf3d::game::{Game, Input};
 use wolf3d::sound::{self, Engine, SoundAssets};
 
@@ -23,19 +23,31 @@ fn adlib_and_music_chunk_counts() {
     let audio = AudioData::load(&data_dir()).expect("audio");
     // All 87 AdLib effects decode.
     assert_eq!(audio.sfx.len(), NUM_SOUNDS);
-    assert!(audio.sfx.iter().all(Option::is_some), "an AdLib effect failed to decode");
+    assert!(
+        audio.sfx.iter().all(Option::is_some),
+        "an AdLib effect failed to decode"
+    );
     // All 27 IMF songs decode to a non-empty stream.
     assert_eq!(audio.music.len(), NUM_MUSIC);
-    assert!(audio.music.iter().all(|m| !m.is_empty()), "a music track is empty");
+    assert!(
+        audio.music.iter().all(|m| !m.is_empty()),
+        "a music track is empty"
+    );
     // A known song has a plausible IMF length (4-byte events).
     let getthem = &audio.music[sound::GETTHEM_MUS];
-    assert!(getthem.len() > 1000 && getthem.len() % 4 == 0, "GETTHEM imf = {}", getthem.len());
+    assert!(
+        getthem.len() > 1000 && getthem.len().is_multiple_of(4),
+        "GETTHEM imf = {}",
+        getthem.len()
+    );
 }
 
 #[test]
 fn adlib_effect_header_is_plausible() {
     let audio = AudioData::load(&data_dir()).expect("audio");
-    let pistol = audio.sfx[sound::ATKPISTOLSND].as_ref().expect("pistol adlib");
+    let pistol = audio.sfx[sound::ATKPISTOLSND]
+        .as_ref()
+        .expect("pistol adlib");
     assert!(pistol.priority > 0);
     assert!(!pistol.data.is_empty());
     // The instrument's sustain bytes are non-zero (SDL_ALPlaySound rejects a
@@ -59,7 +71,10 @@ fn digi_map_and_pcm() {
     assert!(pistol.len() > 1000);
     let min = *pistol.iter().min().unwrap();
     let max = *pistol.iter().max().unwrap();
-    assert!(max - min > 32, "digitized pistol looks constant ({min}..{max})");
+    assert!(
+        max - min > 32,
+        "digitized pistol looks constant ({min}..{max})"
+    );
 }
 
 // ---- Event emission -------------------------------------------------------
@@ -67,7 +82,10 @@ fn digi_map_and_pcm() {
 #[test]
 fn firing_pistol_emits_pistol_sound() {
     let mut game = Game::new(0);
-    let fire = Input { fire: true, ..Default::default() };
+    let fire = Input {
+        fire: true,
+        ..Default::default()
+    };
     let mut sounds = Vec::new();
     for _ in 0..24 {
         game.update(DT, &fire);
@@ -83,13 +101,22 @@ fn firing_pistol_emits_pistol_sound() {
 fn opening_door_emits_door_sound() {
     // E1M1: walk east into the first door, then use it.
     let mut game = Game::new(0);
-    let forward = Input { forward: true, ..Default::default() };
+    let forward = Input {
+        forward: true,
+        ..Default::default()
+    };
     let mut sounds = Vec::new();
     for _ in 0..140 {
         game.update(DT, &forward);
         sounds.extend(game.take_sounds());
     }
-    game.update(DT, &Input { use_door: true, ..Default::default() });
+    game.update(
+        DT,
+        &Input {
+            use_door: true,
+            ..Default::default()
+        },
+    );
     sounds.extend(game.take_sounds());
     assert!(
         sounds.contains(&(sound::OPENDOORSND as u8)),
@@ -104,7 +131,10 @@ fn sound_events_do_not_perturb_gameplay_rng() {
     // RNG (guard death screams use a separate stream).
     let script = |drain: bool| {
         let mut game = Game::new(0);
-        let fire = Input { fire: true, ..Default::default() };
+        let fire = Input {
+            fire: true,
+            ..Default::default()
+        };
         for _ in 0..200 {
             game.update(DT, &fire);
             if drain {

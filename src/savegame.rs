@@ -202,7 +202,12 @@ pub fn read_header(r: &mut Reader) -> Result<SlotHeader, SaveError> {
     let name = r.get_str()?;
     let level_idx = r.get_u32()? as usize;
     let difficulty = r.get_u8()?;
-    Ok(SlotHeader { name, level_idx, difficulty, variant })
+    Ok(SlotHeader {
+        name,
+        level_idx,
+        difficulty,
+        variant,
+    })
 }
 
 /// The directory holding the save slots (`saves/` under the crate root). The

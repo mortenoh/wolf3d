@@ -21,10 +21,16 @@ fn walkable(game: &Game, x: usize, y: usize) -> bool {
 }
 
 fn has_walkable_neighbor(game: &Game, x: usize, y: usize) -> bool {
-    [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| {
-        let (nx, ny) = (x as i32 + dx, y as i32 + dy);
-        nx >= 0 && ny >= 0 && (nx as usize) < N && (ny as usize) < N && walkable(game, nx as usize, ny as usize)
-    })
+    [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)]
+        .iter()
+        .any(|&(dx, dy)| {
+            let (nx, ny) = (x as i32 + dx, y as i32 + dy);
+            nx >= 0
+                && ny >= 0
+                && (nx as usize) < N
+                && (ny as usize) < N
+                && walkable(game, nx as usize, ny as usize)
+        })
 }
 
 /// First plane-0 tile matching `pred` that also has a walkable neighbor to
@@ -46,14 +52,19 @@ fn place_facing(game: &mut Game, tx: usize, ty: usize) {
     use std::f32::consts::{FRAC_PI_2, PI};
     // (neighbor dx, dy, facing angle toward the target tile)
     let opts = [
-        (1i32, 0i32, PI),          // east of target -> face west
-        (-1, 0, 0.0),              // west of target -> face east
-        (0, 1, -FRAC_PI_2),        // south of target -> face north
-        (0, -1, FRAC_PI_2),        // north of target -> face south
+        (1i32, 0i32, PI),   // east of target -> face west
+        (-1, 0, 0.0),       // west of target -> face east
+        (0, 1, -FRAC_PI_2), // south of target -> face north
+        (0, -1, FRAC_PI_2), // north of target -> face south
     ];
     for (dx, dy, angle) in opts {
         let (nx, ny) = (tx as i32 + dx, ty as i32 + dy);
-        if nx >= 0 && ny >= 0 && (nx as usize) < N && (ny as usize) < N && walkable(game, nx as usize, ny as usize) {
+        if nx >= 0
+            && ny >= 0
+            && (nx as usize) < N
+            && (ny as usize) < N
+            && walkable(game, nx as usize, ny as usize)
+        {
             game.player.x = nx as f32 + 0.5;
             game.player.y = ny as f32 + 0.5;
             game.player.angle = angle;
@@ -86,7 +97,10 @@ fn ammo_clip_pickup_raises_ammo_and_removes_static() {
     game.update(DT, &Input::default());
 
     assert_eq!(game.ammo, (before + 8).min(99), "a clip should add 8 ammo");
-    assert!(game.world.statics[i].picked, "the collected clip must stop rendering");
+    assert!(
+        game.world.statics[i].picked,
+        "the collected clip must stop rendering"
+    );
 }
 
 /// (b) A locked door refuses to open without its key and opens once held.
@@ -114,7 +128,13 @@ fn locked_door_needs_its_key() {
 
     // Without the key: use has no effect, the door stays shut.
     game.keys = 0;
-    game.update(DT, &Input { use_door: true, ..Default::default() });
+    game.update(
+        DT,
+        &Input {
+            use_door: true,
+            ..Default::default()
+        },
+    );
     hold(&mut game, &Input::default(), 1.5);
     assert_eq!(
         game.world.doors[di].position, 0.0,
@@ -123,7 +143,13 @@ fn locked_door_needs_its_key() {
 
     // With the key: use opens it fully.
     game.keys = required;
-    game.update(DT, &Input { use_door: true, ..Default::default() });
+    game.update(
+        DT,
+        &Input {
+            use_door: true,
+            ..Default::default()
+        },
+    );
     hold(&mut game, &Input::default(), 1.5);
     assert!(
         game.world.doors[di].position > 0.9,
@@ -149,18 +175,51 @@ fn elevator_advances_level_and_preserves_score() {
     let before = game.level_idx;
 
     // Using the switch enters the intermission (the floor is not yet advanced).
-    game.update(DT, &Input { use_door: true, ..Default::default() });
-    assert_eq!(game.screen, GameScreen::Intermission, "elevator opens the intermission");
-    assert_eq!(game.level_idx, before, "the floor advances only after the intermission");
+    game.update(
+        DT,
+        &Input {
+            use_door: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        game.screen,
+        GameScreen::Intermission,
+        "elevator opens the intermission"
+    );
+    assert_eq!(
+        game.level_idx, before,
+        "the floor advances only after the intermission"
+    );
     // The par/perfect-ratio bonus is awarded up front, on top of the carried score.
     let carried = game.score;
-    assert!(carried >= 1234, "score must not be reset by completing the floor");
+    assert!(
+        carried >= 1234,
+        "score must not be reset by completing the floor"
+    );
 
     // Any key continues to the next floor.
-    game.update(DT, &Input { any_key: true, ..Default::default() });
-    assert_eq!(game.screen, GameScreen::Playing, "continuing resumes play (no load screen)");
-    assert_eq!(game.level_idx, before + 1, "elevator should advance the floor");
-    assert_eq!(game.score, carried, "score carries across floors (not reset)");
+    game.update(
+        DT,
+        &Input {
+            any_key: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        game.screen,
+        GameScreen::Playing,
+        "continuing resumes play (no load screen)"
+    );
+    assert_eq!(
+        game.level_idx,
+        before + 1,
+        "elevator should advance the floor"
+    );
+    assert_eq!(
+        game.score, carried,
+        "score carries across floors (not reset)"
+    );
     assert_eq!(game.lives, 2, "lives must carry across floors");
     assert_eq!(game.keys, 0, "keys reset on the new floor");
 }

@@ -16,10 +16,10 @@ fn gamemaps_decode() {
     // The whole border must be solid wall (1..=89).
     for i in 0..MAP_SIZE {
         for &t in &[
-            l1.plane0[i],                            // top row
+            l1.plane0[i],                             // top row
             l1.plane0[(MAP_SIZE - 1) * MAP_SIZE + i], // bottom row
-            l1.plane0[i * MAP_SIZE],                 // left col
-            l1.plane0[i * MAP_SIZE + MAP_SIZE - 1],  // right col
+            l1.plane0[i * MAP_SIZE],                  // left col
+            l1.plane0[i * MAP_SIZE + MAP_SIZE - 1],   // right col
         ] {
             assert!((1..=89).contains(&t), "border tile {t} not a wall");
         }
