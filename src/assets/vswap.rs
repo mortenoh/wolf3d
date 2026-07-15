@@ -16,6 +16,9 @@ pub const TEX_SIZE: usize = 64;
 pub struct VSwap {
     /// Wall textures as packed framebuffer colors, still column-major.
     pub walls: Vec<Box<[u32; TEX_SIZE * TEX_SIZE]>>,
+    /// Sprites decoded to 64x64 column-major RGBA; 0x00000000 = transparent.
+    /// Indexed by sprite number (chunk - sprite_start).
+    pub sprites: Vec<Box<[u32; TEX_SIZE * TEX_SIZE]>>,
     /// Chunk index where sprites begin == number of wall textures.
     pub sprite_start: usize,
 }
@@ -41,11 +44,51 @@ impl VSwap {
             }
             walls.push(tex);
         }
-        Ok(Self { walls, sprite_start })
+
+        let sound_start = u16at(4);
+        let mut sprites = Vec::with_capacity(sound_start - sprite_start);
+        for chunk in sprite_start..sound_start {
+            let off = u32at(6 + chunk * 4);
+            let len = u16at(6 + u16at(0) * 4 + chunk * 2);
+            sprites.push(decode_sprite(&data[off..off + len]));
+        }
+
+        Ok(Self { walls, sprites, sprite_start })
     }
 
     /// The door face texture pair starts 8 chunks before the sprites.
     pub fn door_texture(&self) -> usize {
         self.sprite_start - 8
     }
+}
+
+/// Decode one sprite chunk. Layout: u16 left/right extent columns, then one
+/// u16 offset per covered column pointing at that column's draw commands.
+/// Commands are (end_row*2, pixel_offset, start_row*2) triples, 0-terminated;
+/// the pixel offset is pre-biased so `chunk[pixel_offset + row]` (signed
+/// wrapping) is the palette index for `row`. Uncovered texels stay 0
+/// (transparent — distinct from opaque palette black, which packs alpha 0xFF).
+fn decode_sprite(chunk: &[u8]) -> Box<[u32; TEX_SIZE * TEX_SIZE]> {
+    let u16at = |i: usize| u16::from_le_bytes([chunk[i], chunk[i + 1]]);
+    let mut tex = Box::new([0u32; TEX_SIZE * TEX_SIZE]);
+
+    let left = u16at(0) as usize;
+    let right = u16at(2) as usize;
+    for col in left..=right {
+        let mut cmd = u16at(4 + (col - left) * 2) as usize;
+        loop {
+            let end = u16at(cmd) as usize / 2;
+            if end == 0 {
+                break;
+            }
+            let pix_off = u16at(cmd + 2) as i16;
+            let start = u16at(cmd + 4) as usize / 2;
+            for row in start..end {
+                let src = (pix_off as isize + row as isize) as usize;
+                tex[col * TEX_SIZE + row] = PALETTE[chunk[src] as usize];
+            }
+            cmd += 6;
+        }
+    }
+    tex
 }

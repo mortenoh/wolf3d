@@ -15,9 +15,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use assets::{Level, MapSet, VSwap};
+use assets::{MapSet, VSwap};
 use fb::{Framebuffer, HEIGHT, WIDTH};
-use raycast::Player;
+use raycast::{Player, World};
 
 // =============================================================================
 // GPU BLITTER
@@ -252,7 +252,7 @@ struct App {
     fb: Framebuffer,
     vswap: VSwap,
     maps: MapSet,
-    level: Level,
+    world: World,
     level_idx: usize,
     player: Player,
     keys: HashSet<KeyCode>,
@@ -269,15 +269,21 @@ impl App {
             .unwrap_or_else(|e| panic!("failed to load VSWAP.WL6 from {dir:?}: {e}"));
         let maps = MapSet::load(&dir)
             .unwrap_or_else(|e| panic!("failed to load GAMEMAPS from {dir:?}: {e}"));
-        let level = maps.level(0);
-        let player = raycast::find_spawn(&level);
+        // WOLF3D_LEVEL=n starts on level n (1-based), handy for debugging.
+        let level_idx = std::env::var("WOLF3D_LEVEL")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .map(|n| (n - 1).min(maps.num_levels() - 1))
+            .unwrap_or(0);
+        let world = World::new(maps.level(level_idx));
+        let player = raycast::find_spawn(&world.level);
         Self {
             window: None,
             gpu: None,
             fb: Framebuffer::new(),
             vswap,
             maps,
-            level,
+            world,
             level_idx: 0,
             player,
             keys: HashSet::new(),
@@ -291,8 +297,8 @@ impl App {
     fn switch_level(&mut self, dir: i32) {
         let n = self.maps.num_levels() as i32;
         self.level_idx = ((self.level_idx as i32 + dir).rem_euclid(n)) as usize;
-        self.level = self.maps.level(self.level_idx);
-        self.player = raycast::find_spawn(&self.level);
+        self.world = World::new(self.maps.level(self.level_idx));
+        self.player = raycast::find_spawn(&self.world.level);
         self.refresh_title();
     }
 
@@ -300,7 +306,7 @@ impl App {
         if let Some(w) = &self.window {
             w.set_title(&format!(
                 "wolf3d — {} ({}/{}) — {} fps",
-                self.level.name,
+                self.world.level.name,
                 self.level_idx + 1,
                 self.maps.num_levels(),
                 self.fps,
@@ -309,6 +315,7 @@ impl App {
     }
 
     fn update(&mut self, dt: f32) {
+        self.world.tick(dt, &self.player);
         let p = &mut self.player;
         let down = |k: KeyCode| self.keys.contains(&k);
 
@@ -342,7 +349,7 @@ impl App {
         let len = (mx * mx + my * my).sqrt();
         if len > 0.0 {
             self.player
-                .walk(&self.level, mx / len * speed * dt, my / len * speed * dt);
+                .walk(&self.world, mx / len * speed * dt, my / len * speed * dt);
         }
     }
 }
@@ -381,21 +388,21 @@ impl ApplicationHandler for App {
                             KeyCode::KeyQ => event_loop.exit(),
                             KeyCode::KeyF | KeyCode::F11 => {
                                 if let Some(w) = &self.window {
-                                    let fs = w.fullscreen().is_none().then_some(
-                                        winit::window::Fullscreen::Borderless(None),
-                                    );
-                                    w.set_fullscreen(fs);
+                                    set_fullscreen(w, !is_fullscreen(w));
                                 }
                             }
                             // Esc leaves fullscreen; quits when already windowed.
                             KeyCode::Escape => {
                                 if let Some(w) = &self.window {
-                                    if w.fullscreen().is_some() {
-                                        w.set_fullscreen(None);
+                                    if is_fullscreen(w) {
+                                        set_fullscreen(w, false);
                                     } else {
                                         event_loop.exit();
                                     }
                                 }
+                            }
+                            KeyCode::Space | KeyCode::KeyE => {
+                                self.world.use_door(&self.player);
                             }
                             KeyCode::KeyN => self.switch_level(1),
                             KeyCode::KeyP => self.switch_level(-1),
@@ -415,7 +422,7 @@ impl ApplicationHandler for App {
                 self.last_frame = now;
 
                 self.update(dt);
-                raycast::render(&mut self.fb, &self.vswap, &self.level, &self.player);
+                raycast::render(&mut self.fb, &self.vswap, &self.world, &self.player);
                 if let Some(gpu) = &mut self.gpu {
                     gpu.render(&self.fb);
                 }
@@ -437,6 +444,30 @@ impl ApplicationHandler for App {
             w.request_redraw();
         }
     }
+}
+
+// macOS native (Spaces) fullscreen silently no-ops for non-bundled binaries
+// like a bare cargo build, so use winit's "simple fullscreen" there instead.
+#[cfg(target_os = "macos")]
+fn is_fullscreen(w: &Window) -> bool {
+    use winit::platform::macos::WindowExtMacOS;
+    w.simple_fullscreen()
+}
+
+#[cfg(target_os = "macos")]
+fn set_fullscreen(w: &Window, on: bool) {
+    use winit::platform::macos::WindowExtMacOS;
+    w.set_simple_fullscreen(on);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_fullscreen(w: &Window) -> bool {
+    w.fullscreen().is_some()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_fullscreen(w: &Window, on: bool) {
+    w.set_fullscreen(on.then_some(winit::window::Fullscreen::Borderless(None)));
 }
 
 fn main() {
