@@ -258,8 +258,10 @@ pub struct Game {
     /// the episode-end sequence; here the flag itself is the victory marker).
     pub victory: bool,
     /// Debug-only god mode for headless demo scripts: the player takes no
-    /// damage. Set via the demo `godmode` command, never from gameplay.
+    /// damage. Set via the demo `godmode` command or the 7 cheat key.
     pub god: bool,
+    /// Cheat: ammo never decrements (the 9 key).
+    pub infinite_ammo: bool,
 
     // Weapon firing animation (WL_AGENT.C T_Attack).
     attacking: bool,
@@ -334,6 +336,7 @@ impl Game {
             died: false,
             victory: false,
             god: false,
+            infinite_ammo: false,
             attacking: false,
             attack_frame: 0,
             attack_count: 0.0,
@@ -986,7 +989,9 @@ impl Game {
             false,
         );
         self.score += points;
-        self.ammo -= 1;
+        if !self.infinite_ammo {
+            self.ammo -= 1;
+        }
     }
 
     fn fire_knife(&mut self) {

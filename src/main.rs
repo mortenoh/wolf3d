@@ -347,8 +347,15 @@ impl App {
 
     fn refresh_title(&self) {
         if let Some(w) = &self.window {
+            let mut cheats = String::new();
+            if self.game.god {
+                cheats.push_str(" [GOD]");
+            }
+            if self.game.infinite_ammo {
+                cheats.push_str(" [AMMO]");
+            }
             w.set_title(&format!(
-                "wolf3d — {} ({}/{}) — {} fps",
+                "wolf3d — {} ({}/{}) — {} fps{cheats}",
                 self.game.world.level.name,
                 self.game.level_idx + 1,
                 self.game.maps.num_levels(),
@@ -493,6 +500,7 @@ impl ApplicationHandler for App {
                             }
                         }
                     } else if event.state.is_pressed() && !event.repeat {
+                        let playing = self.game.screen == GameScreen::Playing;
                         // Any key-down advances the title screen.
                         self.any_key = true;
                         match code {
@@ -528,6 +536,29 @@ impl ApplicationHandler for App {
                             KeyCode::Digit2 => self.weapon_pressed = Some(1),
                             KeyCode::Digit3 => self.weapon_pressed = Some(2),
                             KeyCode::Digit4 => self.weapon_pressed = Some(3),
+                            // --- Cheats (during play only) ---
+                            KeyCode::Digit7 if playing => {
+                                self.game.god = !self.game.god;
+                                self.refresh_title();
+                            }
+                            // Free items: full ammo and both keys (all four
+                            // weapons are always selectable in this port).
+                            KeyCode::Digit8 if playing => {
+                                self.game.ammo = 99;
+                                self.game.keys = wolf3d::hud::KEY_GOLD | wolf3d::hud::KEY_SILVER;
+                            }
+                            KeyCode::Digit9 if playing => {
+                                self.game.infinite_ammo = !self.game.infinite_ammo;
+                                self.refresh_title();
+                            }
+                            // The classic MLI cheat: full health/ammo/keys,
+                            // score wiped to zero.
+                            KeyCode::Digit0 if playing => {
+                                self.game.health = 100;
+                                self.game.ammo = 99;
+                                self.game.keys = wolf3d::hud::KEY_GOLD | wolf3d::hud::KEY_SILVER;
+                                self.game.score = 0;
+                            }
                             KeyCode::KeyN => {
                                 self.game.switch_level(1);
                                 self.refresh_title();
