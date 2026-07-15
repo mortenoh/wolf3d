@@ -3,8 +3,7 @@
 //! each frame and stretch it onto the window (nearest-neighbor, letterboxed
 //! to 4:3 — the original's display aspect).
 
-mod fb;
-mod raycast;
+use wolf3d::{assets, fb, raycast};
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -16,6 +15,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
+use assets::{Level, MapSet, VSwap};
 use fb::{Framebuffer, HEIGHT, WIDTH};
 use raycast::Player;
 
@@ -250,24 +250,61 @@ struct App {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     fb: Framebuffer,
+    vswap: VSwap,
+    maps: MapSet,
+    level: Level,
+    level_idx: usize,
     player: Player,
     keys: HashSet<KeyCode>,
     last_frame: Instant,
     fps_frames: u32,
     fps_since: Instant,
+    fps: u32,
 }
 
 impl App {
     fn new() -> Self {
+        let dir = assets::data_dir();
+        let vswap = VSwap::load(&dir)
+            .unwrap_or_else(|e| panic!("failed to load VSWAP.WL6 from {dir:?}: {e}"));
+        let maps = MapSet::load(&dir)
+            .unwrap_or_else(|e| panic!("failed to load GAMEMAPS from {dir:?}: {e}"));
+        let level = maps.level(0);
+        let player = raycast::find_spawn(&level);
         Self {
             window: None,
             gpu: None,
             fb: Framebuffer::new(),
-            player: Player::new(),
+            vswap,
+            maps,
+            level,
+            level_idx: 0,
+            player,
             keys: HashSet::new(),
             last_frame: Instant::now(),
             fps_frames: 0,
             fps_since: Instant::now(),
+            fps: 0,
+        }
+    }
+
+    fn switch_level(&mut self, dir: i32) {
+        let n = self.maps.num_levels() as i32;
+        self.level_idx = ((self.level_idx as i32 + dir).rem_euclid(n)) as usize;
+        self.level = self.maps.level(self.level_idx);
+        self.player = raycast::find_spawn(&self.level);
+        self.refresh_title();
+    }
+
+    fn refresh_title(&self) {
+        if let Some(w) = &self.window {
+            w.set_title(&format!(
+                "wolf3d — {} ({}/{}) — {} fps",
+                self.level.name,
+                self.level_idx + 1,
+                self.maps.num_levels(),
+                self.fps,
+            ));
         }
     }
 
@@ -304,7 +341,8 @@ impl App {
         }
         let len = (mx * mx + my * my).sqrt();
         if len > 0.0 {
-            self.player.walk(mx / len * speed * dt, my / len * speed * dt);
+            self.player
+                .walk(&self.level, mx / len * speed * dt, my / len * speed * dt);
         }
     }
 }
@@ -359,6 +397,8 @@ impl ApplicationHandler for App {
                                     }
                                 }
                             }
+                            KeyCode::KeyN => self.switch_level(1),
+                            KeyCode::KeyP => self.switch_level(-1),
                             _ => {}
                         }
                     }
@@ -375,16 +415,15 @@ impl ApplicationHandler for App {
                 self.last_frame = now;
 
                 self.update(dt);
-                raycast::render(&mut self.fb, &self.player);
+                raycast::render(&mut self.fb, &self.vswap, &self.level, &self.player);
                 if let Some(gpu) = &mut self.gpu {
                     gpu.render(&self.fb);
                 }
 
                 self.fps_frames += 1;
                 if self.fps_since.elapsed().as_secs_f32() >= 1.0 {
-                    if let Some(w) = &self.window {
-                        w.set_title(&format!("wolf3d — {} fps", self.fps_frames));
-                    }
+                    self.fps = self.fps_frames;
+                    self.refresh_title();
                     self.fps_frames = 0;
                     self.fps_since = now;
                 }

@@ -1,0 +1,6 @@
+//! Wolfenstein 3D rewritten in Rust: CPU raycaster over the original .WL6
+//! data files, displayed through a minimal winit/wgpu blit (see main.rs).
+
+pub mod assets;
+pub mod fb;
+pub mod raycast;

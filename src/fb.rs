@@ -12,15 +12,6 @@ pub const fn rgb(r: u8, g: u8, b: u8) -> u32 {
     (r as u32) | ((g as u32) << 8) | ((b as u32) << 16) | 0xFF00_0000
 }
 
-/// Multiply a packed color by `f` in [0,1] (cheap shading, no unpack helpers needed).
-#[inline]
-pub fn darken(c: u32, f: f32) -> u32 {
-    let r = ((c & 0xFF) as f32 * f) as u32;
-    let g = (((c >> 8) & 0xFF) as f32 * f) as u32;
-    let b = (((c >> 16) & 0xFF) as f32 * f) as u32;
-    r | (g << 8) | (b << 16) | 0xFF00_0000
-}
-
 pub struct Framebuffer {
     pub pixels: Vec<u32>,
 }

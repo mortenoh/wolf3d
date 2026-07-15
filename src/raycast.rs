@@ -1,69 +1,50 @@
-//! The raycaster: one DDA ray per screen column over a grid map.
-//!
-//! Step 1 uses a hardcoded map and flat-colored walls. Step 2 swaps in the
-//! real GAMEMAPS levels and VSWAP textures without touching the DDA itself.
+//! The raycaster: one DDA ray per screen column over the level grid, now
+//! textured from VSWAP.
 //!
 //! Key choices (see rust_demoscene 0602_raycaster for the long version):
 //! - Ray directions are `dir + plane * camera_x`, and the strip height divides
 //!   by the *perpendicular* distance (projection onto `dir`), not the Euclidean
 //!   ray length — that is the fisheye fix.
-//! - N/S-facing walls render darker than E/W ones, the classic Wolf depth cue.
+//! - Wall texture u is the fractional hit position along the wall; v steps
+//!   from the *unclamped* strip top so near walls don't crawl.
+//! - VSWAP wall chunks come in light/dark pairs; N/S faces take the even
+//!   (light) chunk, E/W the odd one — the original's side shading, for free.
 
-use crate::fb::{Framebuffer, HEIGHT, WIDTH, darken, rgb};
+use crate::assets::maps::{Level, MAP_SIZE};
+use crate::assets::vswap::{TEX_SIZE, VSwap};
+use crate::fb::{Framebuffer, HEIGHT, WIDTH, rgb};
 
 // =============================================================================
-// MAP
+// TILE SEMANTICS (plane 0)
 // =============================================================================
 
-pub const MAP_W: usize = 24;
-pub const MAP_H: usize = 24;
-
-/// '.' = empty, digits = wall tile kinds (different colors until real textures).
-#[rustfmt::skip]
-const MAP: [&str; MAP_H] = [
-    "111111111111111111111111",
-    "1......................1",
-    "1..2222..2222..33333...1",
-    "1..2........2..3...3...1",
-    "1..2........2..3...3...1",
-    "1..2222..2222..33.33...1",
-    "1......................1",
-    "1......................1",
-    "1..4444444444..111111..1",
-    "1..4........4..1....1..1",
-    "1..4........4..1....1..1",
-    "1..4...44...........1..1",
-    "1..4...44...........1..1",
-    "1..4........4..1....1..1",
-    "1..4........4..1....1..1",
-    "1..4444444444..111111..1",
-    "1......................1",
-    "1......................1",
-    "1..33..22..44..33..22..1",
-    "1......................1",
-    "1..2........33.........1",
-    "1..2........33.........1",
-    "1......................1",
-    "111111111111111111111111",
-];
+const MAX_WALL: u16 = 89;
+const DOOR_FIRST: u16 = 90;
+const DOOR_LAST: u16 = 101;
 
 #[inline]
-pub fn tile(x: i32, y: i32) -> u8 {
-    if x < 0 || y < 0 || x >= MAP_W as i32 || y >= MAP_H as i32 {
-        return 1; // out of bounds is solid — the DDA can never escape
-    }
-    let c = MAP[y as usize].as_bytes()[x as usize];
-    if c == b'.' { 0 } else { c - b'0' }
+fn is_wall(t: u16) -> bool {
+    (1..=MAX_WALL).contains(&t)
 }
 
-fn wall_color(kind: u8) -> u32 {
-    match kind {
-        1 => rgb(96, 96, 112),  // gray stone
-        2 => rgb(72, 96, 160),  // blue brick
-        3 => rgb(140, 84, 48),  // wood
-        4 => rgb(120, 120, 132),// light stone
-        _ => rgb(200, 60, 200), // missing-texture magenta
+#[inline]
+fn is_door(t: u16) -> bool {
+    (DOOR_FIRST..=DOOR_LAST).contains(&t)
+}
+
+/// Solid for both rays and movement. Doors count as solid until they get
+/// open/close logic.
+#[inline]
+fn is_solid(t: u16) -> bool {
+    is_wall(t) || is_door(t)
+}
+
+#[inline]
+fn tile(level: &Level, x: i32, y: i32) -> u16 {
+    if x < 0 || y < 0 || x >= MAP_SIZE as i32 || y >= MAP_SIZE as i32 {
+        return 1; // out of bounds is solid — the DDA can never escape
     }
+    level.plane0[y as usize * MAP_SIZE + x as usize]
 }
 
 // =============================================================================
@@ -73,42 +54,57 @@ fn wall_color(kind: u8) -> u32 {
 pub struct Player {
     pub x: f32,
     pub y: f32,
-    /// Facing angle in radians; 0 = +x, grows counterclockwise in map space.
+    /// Facing angle in radians; 0 = +x (east), grows toward +y (south).
     pub angle: f32,
 }
 
 const PLAYER_RADIUS: f32 = 0.25;
 
-impl Player {
-    pub fn new() -> Self {
-        // Cell-centered in the open east-west corridor at row 17, facing east.
-        Self { x: 2.5, y: 17.5, angle: 0.0 }
+/// Plane-1 spawn markers 19..=22 = player start facing N, E, S, W.
+pub fn find_spawn(level: &Level) -> Player {
+    for y in 0..MAP_SIZE {
+        for x in 0..MAP_SIZE {
+            let obj = level.plane1[y * MAP_SIZE + x];
+            if (19..=22).contains(&obj) {
+                use std::f32::consts::{FRAC_PI_2, PI};
+                let angle = match obj {
+                    19 => -FRAC_PI_2, // north = -y
+                    20 => 0.0,        // east = +x
+                    21 => FRAC_PI_2,  // south
+                    _ => PI,          // west
+                };
+                return Player { x: x as f32 + 0.5, y: y as f32 + 0.5, angle };
+            }
+        }
     }
+    panic!("level {:?} has no player spawn", level.name);
+}
 
+impl Player {
     /// Move by (dx, dy) in map units, sliding along walls: each axis is applied
     /// independently and rejected only if it would put the player's radius
     /// inside a solid cell.
-    pub fn walk(&mut self, dx: f32, dy: f32) {
+    pub fn walk(&mut self, level: &Level, dx: f32, dy: f32) {
         let nx = self.x + dx;
-        if !occupied(nx, self.y) {
+        if !occupied(level, nx, self.y) {
             self.x = nx;
         }
         let ny = self.y + dy;
-        if !occupied(self.x, ny) {
+        if !occupied(level, self.x, ny) {
             self.y = ny;
         }
     }
 }
 
 /// Is a player-sized circle at (x, y) overlapping any solid cell?
-fn occupied(x: f32, y: f32) -> bool {
+fn occupied(level: &Level, x: f32, y: f32) -> bool {
     let x0 = (x - PLAYER_RADIUS).floor() as i32;
     let x1 = (x + PLAYER_RADIUS).floor() as i32;
     let y0 = (y - PLAYER_RADIUS).floor() as i32;
     let y1 = (y + PLAYER_RADIUS).floor() as i32;
     for cy in y0..=y1 {
         for cx in x0..=x1 {
-            if tile(cx, cy) != 0 {
+            if is_solid(tile(level, cx, cy)) {
                 return true;
             }
         }
@@ -123,10 +119,23 @@ fn occupied(x: f32, y: f32) -> bool {
 /// Half the horizontal FOV as the camera-plane length: 0.66 ≈ Wolf's ~66°.
 const PLANE_LEN: f32 = 0.66;
 
-const CEILING: u32 = rgb(56, 56, 56); // Wolf's solid ceiling gray
+/// Wolf's flat ceiling/floor colors: VGA palette 0x1d and 0x19.
+const CEILING: u32 = rgb(56, 56, 56);
 const FLOOR: u32 = rgb(112, 112, 112);
 
-pub fn render(fb: &mut Framebuffer, p: &Player) {
+/// Wall texture chunk for a hit: walls pair up as (tile-1)*2, +1 on E/W
+/// (vertical) faces — the original's horizwall/vertwall tables. Doors use the
+/// dedicated pair near the end of the wall chunks.
+fn texture_for(vswap: &VSwap, t: u16, side_ns: bool) -> usize {
+    let base = if is_door(t) {
+        vswap.door_texture()
+    } else {
+        (t as usize - 1) * 2
+    };
+    base + !side_ns as usize
+}
+
+pub fn render(fb: &mut Framebuffer, vswap: &VSwap, level: &Level, p: &Player) {
     // Ceiling / floor halves.
     fb.pixels[..WIDTH * (HEIGHT / 2)].fill(CEILING);
     fb.pixels[WIDTH * (HEIGHT / 2)..].fill(FLOOR);
@@ -156,7 +165,7 @@ pub fn render(fb: &mut Framebuffer, p: &Player) {
             (1, (map_y as f32 + 1.0 - p.y) * delta_y)
         };
 
-        let mut hit = 0u8;
+        let mut hit = 0u16;
         let mut side_ns = false; // true = crossed a horizontal border (N/S face)
         while hit == 0 {
             if side_x < side_y {
@@ -168,24 +177,39 @@ pub fn render(fb: &mut Framebuffer, p: &Player) {
                 map_y += step_y;
                 side_ns = true;
             }
-            hit = tile(map_x, map_y);
+            let t = tile(level, map_x, map_y);
+            if is_solid(t) {
+                hit = t;
+            }
         }
 
         // Perpendicular distance: total side distance minus the last step.
         let perp = if side_ns { side_y - delta_y } else { side_x - delta_x };
         let perp = perp.max(1e-4);
 
-        let line_h = (HEIGHT as f32 / perp) as i32;
-        let y0 = ((HEIGHT as i32 - line_h) / 2).max(0) as usize;
-        let y1 = ((HEIGHT as i32 + line_h) / 2).min(HEIGHT as i32) as usize;
-
-        let mut color = wall_color(hit);
-        if side_ns {
-            color = darken(color, 0.7);
+        // Fractional hit position along the wall = texture u.
+        let wall_x = if side_ns { p.x + perp * ray_x } else { p.y + perp * ray_y };
+        let wall_frac = wall_x - wall_x.floor();
+        let mut tex_u = (wall_frac * TEX_SIZE as f32) as usize & (TEX_SIZE - 1);
+        // Mirror so textures read left-to-right on the faces we approach.
+        if (!side_ns && ray_x > 0.0) || (side_ns && ray_y < 0.0) {
+            tex_u = TEX_SIZE - 1 - tex_u;
         }
 
+        let line_h = HEIGHT as f32 / perp;
+        let top = (HEIGHT as f32 - line_h) / 2.0;
+        let y0 = top.max(0.0) as usize;
+        let y1 = ((HEIGHT as f32 + line_h) / 2.0).min(HEIGHT as f32) as usize;
+
+        let texture = &vswap.walls[texture_for(vswap, hit, side_ns)];
+        let column = &texture[tex_u * TEX_SIZE..(tex_u + 1) * TEX_SIZE];
+
+        // v steps from the UNCLAMPED strip top so oversize strips stay put.
+        let v_step = TEX_SIZE as f32 / line_h;
+        let mut v = (y0 as f32 - top) * v_step;
         for y in y0..y1 {
-            fb.pixels[y * WIDTH + col] = color;
+            fb.pixels[y * WIDTH + col] = column[(v as usize).min(TEX_SIZE - 1)];
+            v += v_step;
         }
     }
 }
