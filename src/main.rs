@@ -245,6 +245,10 @@ impl Gpu {
 // APP / GAME LOOP
 // =============================================================================
 
+/// Radians of turn per raw mouse count. Tuned for a Quake-ish feel at normal
+/// macOS mouse speed.
+const MOUSE_SENSITIVITY: f32 = 0.0022;
+
 struct App {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
@@ -259,6 +263,10 @@ struct App {
     use_pressed: bool,
     weapon_pressed: Option<u8>,
     mouse_fire: bool,
+    /// Accumulated raw mouse x-delta since the last tic (counts, unscaled).
+    mouse_dx: f32,
+    /// Whether the cursor is currently grabbed for mouse-look.
+    cursor_grabbed: bool,
     // Edge-triggered menu navigation (consumed once per key-down).
     menu_up: bool,
     menu_down: bool,
@@ -284,6 +292,8 @@ impl App {
             use_pressed: false,
             weapon_pressed: None,
             mouse_fire: false,
+            mouse_dx: 0.0,
+            cursor_grabbed: false,
             menu_up: false,
             menu_down: false,
             menu_enter: false,
@@ -293,6 +303,33 @@ impl App {
             fps_frames: 0,
             fps_since: Instant::now(),
             fps: 0,
+        }
+    }
+
+    /// Grab and hide the cursor during play (mouse-look), release it in menus.
+    fn sync_cursor_grab(&mut self) {
+        let want = self.game.screen == GameScreen::Playing;
+        if want == self.cursor_grabbed {
+            return;
+        }
+        if let Some(w) = &self.window {
+            use winit::window::CursorGrabMode;
+            let mode = if want { CursorGrabMode::Locked } else { CursorGrabMode::None };
+            // Locked is supported on macOS; fall back to Confined elsewhere.
+            let ok = w
+                .set_cursor_grab(mode)
+                .or_else(|_| {
+                    w.set_cursor_grab(if want {
+                        CursorGrabMode::Confined
+                    } else {
+                        CursorGrabMode::None
+                    })
+                })
+                .is_ok();
+            if ok {
+                w.set_cursor_visible(!want);
+                self.cursor_grabbed = want;
+            }
         }
     }
 
@@ -324,6 +361,7 @@ impl App {
                 || down(KeyCode::ControlLeft)
                 || down(KeyCode::ControlRight)
                 || self.mouse_fire,
+            turn_delta: std::mem::take(&mut self.mouse_dx) * MOUSE_SENSITIVITY,
             menu_up: std::mem::take(&mut self.menu_up),
             menu_down: std::mem::take(&mut self.menu_down),
             menu_enter: std::mem::take(&mut self.menu_enter),
@@ -380,10 +418,24 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::MouseInput { state, button, .. } => {
-                if button == winit::event::MouseButton::Left {
-                    self.mouse_fire = state.is_pressed();
+            WindowEvent::MouseInput { state, button, .. } => match button {
+                winit::event::MouseButton::Left => self.mouse_fire = state.is_pressed(),
+                winit::event::MouseButton::Right if state.is_pressed() => {
+                    self.use_pressed = true;
                 }
+                _ => {}
+            },
+            WindowEvent::MouseWheel { delta, .. } => {
+                let up = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y > 0.0,
+                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y > 0.0,
+                };
+                let next = if up {
+                    (self.game.weapon + 1) % 4
+                } else {
+                    (self.game.weapon + 3) % 4
+                };
+                self.weapon_pressed = Some(next as u8);
             }
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = &mut self.gpu {
@@ -456,6 +508,7 @@ impl ApplicationHandler for App {
                     event_loop.exit();
                     return;
                 }
+                self.sync_cursor_grab();
                 self.game.render(&mut self.fb);
                 if let Some(gpu) = &mut self.gpu {
                     gpu.render(&self.fb);
@@ -470,6 +523,21 @@ impl ApplicationHandler for App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        // Raw (unaccelerated) motion for mouse-look; only while grabbed so the
+        // menu cursor never turns the player.
+        if let winit::event::DeviceEvent::MouseMotion { delta } = event
+            && self.cursor_grabbed
+        {
+            self.mouse_dx += delta.0 as f32;
         }
     }
 

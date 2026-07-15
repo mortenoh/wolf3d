@@ -30,6 +30,9 @@ pub struct Input {
     pub select_weapon: Option<u8>,
     /// Fire button held state (Ctrl / mouse). Edge- and hold-aware inside Game.
     pub fire: bool,
+    /// Mouse-look: radians to add to the facing this frame (already scaled by
+    /// the frontend's sensitivity; positive turns right/clockwise).
+    pub turn_delta: f32,
 
     // --- Menu navigation (all edge-triggered: set true only on key-down) ---
     pub menu_up: bool,
@@ -425,6 +428,7 @@ impl Game {
         if input.turn_right {
             self.player.angle += TURN_SPEED * dt;
         }
+        self.player.angle += input.turn_delta;
 
         let speed = if input.run { MOVE_SPEED * RUN_FACTOR } else { MOVE_SPEED };
         let (dx, dy) = (self.player.angle.cos(), self.player.angle.sin());
