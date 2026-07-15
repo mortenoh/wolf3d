@@ -1,5 +1,6 @@
 //! Loader sanity checks against the real .WL6 data files (requires `data/`).
 
+use wolf3d::assets::vgagraph::{FACE1APIC, N_0PIC, STATUSBARPIC, VgaGraph};
 use wolf3d::assets::{MAP_SIZE, MapSet, VSwap, data_dir};
 
 #[test]
@@ -45,4 +46,24 @@ fn vswap_walls() {
     for tex in &vswap.walls {
         assert!(tex.iter().all(|&c| c >> 24 == 0xFF));
     }
+}
+
+#[test]
+fn vgagraph_pictures() {
+    let vga = VgaGraph::load(&data_dir()).expect("data files present");
+
+    // The status bar spans the full 320px width and is 40px tall.
+    let bar = vga.pic(STATUSBARPIC);
+    assert_eq!((bar.width, bar.height), (320, 40));
+    assert_eq!(bar.pixels.len(), 320 * 40);
+    // Decoded pics are opaque palette colors.
+    assert!(bar.pixels.iter().all(|&c| c >> 24 == 0xFF));
+
+    // The HUD number font: eight-wide digit pics.
+    let zero = vga.pic(N_0PIC);
+    assert_eq!((zero.width, zero.height), (8, 16));
+
+    // The first BJ face frame.
+    let face = vga.pic(FACE1APIC);
+    assert_eq!((face.width, face.height), (24, 32));
 }

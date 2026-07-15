@@ -2,8 +2,9 @@
 //! The windowed frontend translates key state into [`Input`]; the headless
 //! demo driver synthesizes it. Both run exactly the same code.
 
-use crate::assets::{self, MapSet, VSwap};
+use crate::assets::{self, MapSet, VSwap, VgaGraph};
 use crate::fb::Framebuffer;
+use crate::hud::{self, Hud, HudState, VIEW_H};
 use crate::raycast::{self, Player, World};
 
 const MOVE_SPEED: f32 = 3.0; // tiles/sec (Wolf run speed is ~6)
@@ -22,14 +23,32 @@ pub struct Input {
     pub run: bool,
     /// Edge-triggered: true only on the frame the use key goes down.
     pub use_door: bool,
+    /// Edge-triggered weapon selection (0=knife, 1=pistol, 2=machinegun, 3=chaingun).
+    pub select_weapon: Option<u8>,
 }
+
+/// Which weapon the player is holding. Indices match the VSWAP ready-sprite
+/// order (see `hud::weapon_ready_sprite`).
+pub const WEAPON_KNIFE: usize = 0;
+pub const WEAPON_PISTOL: usize = 1;
+pub const WEAPON_CHAINGUN: usize = 3;
 
 pub struct Game {
     pub vswap: VSwap,
     pub maps: MapSet,
+    pub vga: VgaGraph,
+    pub hud: Hud,
     pub world: World,
     pub player: Player,
     pub level_idx: usize,
+
+    // Player stats — displayed on the HUD, no gameplay effects yet.
+    pub health: i32,
+    pub ammo: i32,
+    pub score: i32,
+    pub lives: i32,
+    pub keys: u8,
+    pub weapon: usize,
 }
 
 impl Game {
@@ -39,10 +58,27 @@ impl Game {
             .unwrap_or_else(|e| panic!("failed to load VSWAP.WL6 from {dir:?}: {e}"));
         let maps = MapSet::load(&dir)
             .unwrap_or_else(|e| panic!("failed to load GAMEMAPS from {dir:?}: {e}"));
+        let vga = VgaGraph::load(&dir)
+            .unwrap_or_else(|e| panic!("failed to load VGAGRAPH from {dir:?}: {e}"));
+        let hud = Hud::new(&vga);
         let level_idx = level_idx.min(maps.num_levels() - 1);
         let world = World::new(maps.level(level_idx));
         let player = raycast::find_spawn(&world.level);
-        Self { vswap, maps, world, player, level_idx }
+        Self {
+            vswap,
+            maps,
+            vga,
+            hud,
+            world,
+            player,
+            level_idx,
+            health: 100,
+            ammo: 8,
+            score: 0,
+            lives: 3,
+            keys: 0,
+            weapon: WEAPON_PISTOL,
+        }
     }
 
     pub fn switch_level(&mut self, dir: i32) {
@@ -53,6 +89,10 @@ impl Game {
     }
 
     pub fn update(&mut self, dt: f32, input: &Input) {
+        if let Some(w) = input.select_weapon {
+            self.weapon = w as usize;
+        }
+
         self.world.tick(dt, &self.player);
         if input.use_door {
             self.world.use_door(&self.player);
@@ -93,6 +133,23 @@ impl Game {
     }
 
     pub fn render(&self, fb: &mut Framebuffer) {
-        raycast::render(fb, &self.vswap, &self.world, &self.player);
+        raycast::render(fb, &self.vswap, &self.world, &self.player, VIEW_H);
+        hud::draw_weapon(
+            fb,
+            &self.vswap,
+            hud::weapon_ready_sprite(&self.vswap, self.weapon),
+        );
+        self.hud.draw(
+            fb,
+            &HudState {
+                // Per-episode floor number, like the original's mapon+1.
+                floor: (self.level_idx % 10) as i32 + 1,
+                score: self.score,
+                lives: self.lives,
+                health: self.health,
+                ammo: self.ammo,
+                keys: self.keys,
+            },
+        );
     }
 }

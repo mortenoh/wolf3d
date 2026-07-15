@@ -249,6 +249,7 @@ struct App {
     game: Game,
     keys: HashSet<KeyCode>,
     use_pressed: bool,
+    weapon_pressed: Option<u8>,
     last_frame: Instant,
     fps_frames: u32,
     fps_since: Instant,
@@ -264,6 +265,7 @@ impl App {
             game,
             keys: HashSet::new(),
             use_pressed: false,
+            weapon_pressed: None,
             last_frame: Instant::now(),
             fps_frames: 0,
             fps_since: Instant::now(),
@@ -294,6 +296,7 @@ impl App {
             turn_right: down(KeyCode::ArrowRight),
             run: down(KeyCode::ShiftLeft),
             use_door: std::mem::take(&mut self.use_pressed),
+            select_weapon: self.weapon_pressed.take(),
         };
         self.game.update(dt, &input);
     }
@@ -347,6 +350,10 @@ impl ApplicationHandler for App {
                                 }
                             }
                             KeyCode::Space | KeyCode::KeyE => self.use_pressed = true,
+                            KeyCode::Digit1 => self.weapon_pressed = Some(0),
+                            KeyCode::Digit2 => self.weapon_pressed = Some(1),
+                            KeyCode::Digit3 => self.weapon_pressed = Some(2),
+                            KeyCode::Digit4 => self.weapon_pressed = Some(3),
                             KeyCode::KeyN => {
                                 self.game.switch_level(1);
                                 self.refresh_title();

@@ -5,4 +5,5 @@ pub mod assets;
 pub mod demo;
 pub mod fb;
 pub mod game;
+pub mod hud;
 pub mod raycast;

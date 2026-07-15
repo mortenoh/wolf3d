@@ -2,11 +2,13 @@
 
 pub mod maps;
 pub mod palette;
+pub mod vgagraph;
 pub mod vswap;
 
 use std::path::PathBuf;
 
 pub use maps::{Level, MAP_SIZE, MapSet};
+pub use vgagraph::VgaGraph;
 pub use vswap::{TEX_SIZE, VSwap};
 
 /// The data directory: `data/` under the crate root.

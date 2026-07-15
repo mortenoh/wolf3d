@@ -19,7 +19,7 @@
 
 use crate::assets::maps::{Level, MAP_SIZE};
 use crate::assets::vswap::{TEX_SIZE, VSwap};
-use crate::fb::{Framebuffer, HEIGHT, WIDTH, rgb};
+use crate::fb::{Framebuffer, WIDTH, rgb};
 
 // =============================================================================
 // TILE SEMANTICS (plane 0)
@@ -404,10 +404,15 @@ fn cast(world: &World, vswap: &VSwap, px: f32, py: f32, ray_x: f32, ray_y: f32) 
     }
 }
 
-pub fn render(fb: &mut Framebuffer, vswap: &VSwap, world: &World, p: &Player) {
-    // Ceiling / floor halves.
-    fb.pixels[..WIDTH * (HEIGHT / 2)].fill(CEILING);
-    fb.pixels[WIDTH * (HEIGHT / 2)..].fill(FLOOR);
+/// Render the 3D view into the top `view_h` rows of the framebuffer, leaving
+/// the rows below untouched for the HUD. Wall/sprite projection scales to
+/// `view_h`, so shrinking the view letterboxes rather than crops.
+pub fn render(fb: &mut Framebuffer, vswap: &VSwap, world: &World, p: &Player, view_h: usize) {
+    let view_hf = view_h as f32;
+
+    // Ceiling / floor halves of the 3D view.
+    fb.pixels[..WIDTH * (view_h / 2)].fill(CEILING);
+    fb.pixels[WIDTH * (view_h / 2)..WIDTH * view_h].fill(FLOOR);
 
     // Perpendicular wall distance per column, for sprite occlusion.
     let mut zbuf = [f32::MAX; WIDTH];
@@ -424,10 +429,10 @@ pub fn render(fb: &mut Framebuffer, vswap: &VSwap, world: &World, p: &Player) {
         let hit = cast(world, vswap, p.x, p.y, ray_x, ray_y);
         zbuf[col] = hit.perp;
 
-        let line_h = HEIGHT as f32 / hit.perp;
-        let top = (HEIGHT as f32 - line_h) / 2.0;
+        let line_h = view_hf / hit.perp;
+        let top = (view_hf - line_h) / 2.0;
         let y0 = top.max(0.0) as usize;
-        let y1 = ((HEIGHT as f32 + line_h) / 2.0).min(HEIGHT as f32) as usize;
+        let y1 = ((view_hf + line_h) / 2.0).min(view_hf) as usize;
 
         let texture = &vswap.walls[hit.texture];
         let column = &texture[hit.tex_u * TEX_SIZE..(hit.tex_u + 1) * TEX_SIZE];
@@ -461,14 +466,14 @@ pub fn render(fb: &mut Framebuffer, vswap: &VSwap, world: &World, p: &Player) {
         }
 
         let screen_x = WIDTH as f32 / 2.0 * (1.0 + cam_x / depth);
-        let size = HEIGHT as f32 / depth; // sprites fill floor-to-ceiling like walls
+        let size = view_hf / depth; // sprites fill floor-to-ceiling like walls
         let left = screen_x - size / 2.0;
-        let top = (HEIGHT as f32 - size) / 2.0;
+        let top = (view_hf - size) / 2.0;
 
         let x0 = left.max(0.0) as usize;
         let x1 = (left + size).min(WIDTH as f32).max(0.0) as usize;
         let y0 = top.max(0.0) as usize;
-        let y1 = (top + size).min(HEIGHT as f32).max(0.0) as usize;
+        let y1 = (top + size).min(view_hf).max(0.0) as usize;
 
         let texture = &vswap.sprites[s.sprite];
         let uv_step = TEX_SIZE as f32 / size;
