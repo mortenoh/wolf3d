@@ -62,6 +62,11 @@ pub struct Gfx {
     pub get_psyched: usize,
     pub l_bjwins: usize,
     pub high_scores: usize,
+    /// Column-header pics for the high-score board (WL6 only: C_NAMEPIC /
+    /// C_LEVELPIC / C_SCOREPIC). Spear bakes the headers into HIGHSCORESPIC.
+    pub hs_name: Option<usize>,
+    pub hs_level: Option<usize>,
+    pub hs_score: Option<usize>,
     /// First end-of-episode article text chunk.
     pub end_art1: usize,
     /// The "Read This!" help article (WL6 only; SOD has none).
@@ -98,6 +103,9 @@ const GFX_WL6: Gfx = Gfx {
     get_psyched: 134,
     l_bjwins: 85,
     high_scores: 90,
+    hs_name: Some(39),  // C_NAMEPIC
+    hs_level: Some(38), // C_LEVELPIC
+    hs_score: Some(40), // C_SCOREPIC
     end_art1: 143,
     help_art: Some(138),
 };
@@ -132,6 +140,10 @@ const GFX_SOD: Gfx = Gfx {
     get_psyched: 149,
     l_bjwins: 78,
     high_scores: 29,
+    // Headers are drawn into HIGHSCORESPIC under SPEAR — no separate chunks.
+    hs_name: None,
+    hs_level: None,
+    hs_score: None,
     end_art1: 168,
     help_art: None,
 };

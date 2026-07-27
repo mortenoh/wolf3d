@@ -261,6 +261,11 @@ pub struct InterGfx {
     psyched: Picture,
     bjwin: Picture,
     highscores: Picture,
+    /// WL6 column headers (C_NAMEPIC / C_LEVELPIC / C_SCOREPIC). Absent on
+    /// Spear, where HIGHSCORESPIC already paints the headers.
+    hs_headers: Option<[Picture; 3]>,
+    /// True under Spear of Destiny (full-width high-score banner).
+    sod: bool,
     /// The load screen paints itself in the menu's border color, so it follows
     /// the variant (red on WL6, blue on Spear).
     bord: u8,
@@ -269,6 +274,10 @@ pub struct InterGfx {
 impl InterGfx {
     pub fn new(vga: &VgaGraph, variant: &crate::variant::Variant) -> Self {
         let gfx = &variant.gfx;
+        let hs_headers = match (gfx.hs_name, gfx.hs_level, gfx.hs_score) {
+            (Some(n), Some(l), Some(s)) => Some([vga.pic(n), vga.pic(l), vga.pic(s)]),
+            _ => None,
+        };
         Self {
             bord: crate::menu::Colors::for_variant(variant.is_sod()).bord(),
             font: Font::load(vga, 0),
@@ -277,6 +286,8 @@ impl InterGfx {
             psyched: vga.pic(gfx.get_psyched),
             bjwin: vga.pic(gfx.l_bjwins),
             highscores: vga.pic(gfx.high_scores),
+            hs_headers,
+            sod: variant.is_sod(),
         }
     }
 
@@ -316,37 +327,55 @@ impl InterGfx {
 
     /// WL_INTER.C `DrawHighScores`: the board header and the seven ranked rows
     /// (name / level reached / score). `editing` marks a slot mid-name-entry.
+    ///
+    /// Headers are never drawn as text: WL6 uses C_NAMEPIC / C_LEVELPIC /
+    /// C_SCOREPIC sprites; Spear bakes the headers into HIGHSCORESPIC itself.
     pub fn render_high_scores(
         &self,
         fb: &mut Framebuffer,
         table: &[HighScore],
         editing: Option<(usize, &str)>,
     ) {
-        // The menu-red backdrop with the HIGHSCORES header centered near the top.
-        fill(fb, 0x29);
-        let hx = (WIDTH as i32 - self.highscores.width as i32) / 2;
-        blit(fb, &self.highscores, hx, 8);
+        // ClearMScreen + DrawStripes(10): variant bord fill, black header band.
+        fill(fb, self.bord);
+        bar(fb, 0, 10, WIDTH as i32, 24, 0);
 
-        // Column headers.
-        let head_y = 68;
-        self.font.draw(fb, 4 * 8, head_y, "Name", 0x17);
-        self.font.draw(fb, 20 * 8, head_y, "Level", 0x17);
-        self.font.draw(fb, 28 * 8, head_y, "Score", 0x17);
+        if self.sod {
+            // SPEAR: full-width banner that already includes Name/Level/Score.
+            blit(fb, &self.highscores, 0, 0);
+        } else {
+            // WL6: title banner (HIGHSCORESPIC at x=48) plus column-header pics.
+            blit(fb, &self.highscores, 48, 0);
+            if let Some([name, level, score]) = &self.hs_headers {
+                blit(fb, name, 4 * 8, 68);
+                blit(fb, level, 20 * 8, 68);
+                blit(fb, score, 28 * 8, 68);
+            }
+        }
 
+        // Rows: PrintY = 76 + 16 * i (WL_INTER.C).
+        let base_color = if self.sod { 0x13 } else { 0x0f };
         for (i, e) in table.iter().enumerate() {
-            let y = 78 + i as i32 * 15;
+            let y = 76 + i as i32 * 16;
             let is_edit = editing.map(|(s, _)| s) == Some(i);
-            let color = if is_edit { 0x13 } else { 0x17 };
+            let color = if is_edit { 0x13 } else { base_color };
             let name = if let Some((_, n)) = editing.filter(|_| is_edit) {
                 format!("{n}_")
             } else {
                 e.name.clone()
             };
-            self.font.draw(fb, 4 * 8, y, &name, color);
-            // Level reached, right-aligned in its column.
-            self.right(fb, 24 * 8, y, &e.completed.to_string());
-            // Score, right-aligned to the far column.
-            self.right(fb, 36 * 8, y, &e.score.to_string());
+            let name_x = if self.sod { 16 } else { 4 * 8 };
+            self.font.draw(fb, name_x, y, &name, color);
+            // Level: right-aligned (22*8 - w on WL6, 194 - w on SOD).
+            let level = e.completed.to_string();
+            let lw = self.font.text_width(&level) as i32;
+            let level_right = if self.sod { 194 } else { 22 * 8 };
+            self.font.draw(fb, level_right - lw, y, &level, color);
+            // Score: right-aligned (34*8 - 8 - w on WL6).
+            let score = e.score.to_string();
+            let sw = self.font.text_width(&score) as i32;
+            let score_right = if self.sod { 34 * 8 } else { 34 * 8 - 8 };
+            self.font.draw(fb, score_right - sw, y, &score, color);
         }
     }
 
