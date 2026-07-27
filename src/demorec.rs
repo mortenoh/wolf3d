@@ -66,7 +66,8 @@ pub const MAGIC: &[u8; 8] = b"WOLF3DDM";
 /// - 1: original header
 /// - 2: variant tag (WL6 vs SOD)
 /// - 3: `clear_actors` so gen demos recorded without grunts replay the same way
-pub const VERSION: u16 = 3;
+/// - 4: optional complete AI policy for exact forge warm starts
+pub const VERSION: u16 = 4;
 
 /// Variant tag stored in the demo header: 0 = WL6, 1 = Spear of Destiny.
 pub const VAR_WL6: u8 = 0;
@@ -84,6 +85,21 @@ const F_USE: u16 = 1 << 7;
 const F_FIRE: u16 = 1 << 8;
 const F_HAS_WEAPON: u16 = 1 << 9;
 const F_HAS_TURN_DELTA: u16 = 1 << 10;
+
+/// Search knobs that produced a forged demo. Keeping them in the recording
+/// lets a later forge invocation continue climbing from the exact champion
+/// instead of reconstructing only its RNG seed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AiPolicy {
+    pub seed: u32,
+    pub engage_range: f32,
+    pub aim_slack: f32,
+    pub strafe_period: u32,
+    pub strafe_left_bias: bool,
+    pub panic_health: i32,
+    pub hunt_kills: bool,
+    pub seek_secrets: bool,
+}
 
 /// A recorded demo: the starting game state header plus one packed [`Input`] per
 /// 70 Hz tic.
@@ -110,11 +126,19 @@ pub struct Demo {
     /// When true, attract playback clears the actor list after load (matches
     /// gen_level_demos recordings that path through an empty map).
     pub clear_actors: bool,
+    /// Exact forge champion policy (v4+). Human and legacy recordings omit it.
+    pub ai_policy: Option<AiPolicy>,
     /// One input per tic, in playback order.
     pub tics: Vec<Input>,
 }
 
 impl Demo {
+    /// Legacy/scripted recordings may write an arbitrary per-tic angle delta.
+    /// Forge AI uses only the player's normal-rate turn keys.
+    pub fn has_direct_turns(&self) -> bool {
+        self.tics.iter().any(|input| input.turn_delta != 0.0)
+    }
+
     /// Capture the header from the game's current state, ready to record tics.
     /// Call this at the exact tic recording starts (before any recorded tic has
     /// advanced the simulation) so the RNG indices and camera match the run.
@@ -140,6 +164,7 @@ impl Demo {
             windowed: false,
             // Capture whether the recorder emptied the map (gen_level_demos).
             clear_actors: game.actors.list.is_empty(),
+            ai_policy: None,
             tics: Vec::new(),
         }
     }
@@ -169,6 +194,17 @@ impl Demo {
         w.put_bool(self.god);
         w.put_bool(self.windowed);
         w.put_bool(self.clear_actors);
+        w.put_bool(self.ai_policy.is_some());
+        if let Some(policy) = &self.ai_policy {
+            w.put_u32(policy.seed);
+            w.put_f32(policy.engage_range);
+            w.put_f32(policy.aim_slack);
+            w.put_u32(policy.strafe_period);
+            w.put_bool(policy.strafe_left_bias);
+            w.put_i32(policy.panic_health);
+            w.put_bool(policy.hunt_kills);
+            w.put_bool(policy.seek_secrets);
+        }
         w.put_u32(self.tics.len() as u32);
         for input in &self.tics {
             pack_input(&mut w, input);
@@ -186,7 +222,7 @@ impl Demo {
         // Version 1 predates the variant tag; those demos are all WL6.
         let variant = match version {
             1 => VAR_WL6,
-            2 | 3 => r.get_u8()?,
+            2..=4 => r.get_u8()?,
             v => return Err(SaveError::BadVersion(v)),
         };
         let level_idx = r.get_u32()? as usize;
@@ -204,6 +240,20 @@ impl Demo {
         let windowed = r.get_bool()?;
         // v3+: whether the recording ran with an emptied actor list.
         let clear_actors = if version >= 3 { r.get_bool()? } else { false };
+        let ai_policy = if version >= 4 && r.get_bool()? {
+            Some(AiPolicy {
+                seed: r.get_u32()?,
+                engage_range: r.get_f32()?,
+                aim_slack: r.get_f32()?,
+                strafe_period: r.get_u32()?,
+                strafe_left_bias: r.get_bool()?,
+                panic_health: r.get_i32()?,
+                hunt_kills: r.get_bool()?,
+                seek_secrets: r.get_bool()?,
+            })
+        } else {
+            None
+        };
         let ntics = r.get_u32()? as usize;
         let mut tics = Vec::with_capacity(ntics);
         for _ in 0..ntics {
@@ -225,6 +275,7 @@ impl Demo {
             god,
             windowed,
             clear_actors,
+            ai_policy,
             tics,
         })
     }

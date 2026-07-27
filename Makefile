@@ -85,18 +85,21 @@ play-demo: data ## Replay a .dm attract demo (DEMO=e1m1 or demos/e1m1.dm; HEADLE
 ITERS    ?= 50000
 THREADS  ?=
 MAX_SECS ?= 120
+SEARCH_SEED ?=
 GOD      ?=
 FOCUS    ?= secrets
 
 gen-demos: data ## AI-search fair demos for every WL6 floor (wolf3d forge)
 	$(CARGO) run --release --bin wolf3d -- forge --iters $(ITERS) \
 		$(if $(THREADS),--threads $(THREADS)) --max-secs $(MAX_SECS) \
+		$(if $(SEARCH_SEED),--search-seed $(SEARCH_SEED)) \
 		$(if $(filter 1,$(GOD)),--god) --focus $(FOCUS)
 
 gen-demo: data ## AI-search one floor (LEVEL=0-based index, ITERS=n)
 	@test -n "$(LEVEL)" || { echo "LEVEL is required (0-based), e.g. make gen-demo LEVEL=0 ITERS=100000"; exit 1; }
 	$(CARGO) run --release --bin wolf3d -- forge --levels $(LEVEL) --iters $(ITERS) \
 		$(if $(THREADS),--threads $(THREADS)) --max-secs $(MAX_SECS) \
+		$(if $(SEARCH_SEED),--search-seed $(SEARCH_SEED)) \
 		$(if $(filter 1,$(GOD)),--god) --focus $(FOCUS)
 
 ##@ Develop

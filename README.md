@@ -89,10 +89,14 @@ options and subcommands. After `make release`, run `./bin/wolf3d`.
 fair clears by default (pistol, live enemies, no god; boss floors use a
 plausible carried chaingun/99-ammo loadout). Score: **+100** finish,
 **+10** kill, **+1** secret (faster breaks ties). `--god` enables invulnerable
-Forge defaults to `--focus secrets`: it forces secret-seeking policies, enters opened rooms,
-collects nearby rewards, and ranks completions by secrets, collected pickups
-(health/ammo/weapons/keys/treasure), normal score, then speed. Warm-starts from existing
-`demos/eXmY.dm` and only overwrites when better.
+runs. Forge defaults to `--focus secrets`: it forces secret-seeking policies,
+enters opened rooms, collects nearby rewards, and ranks completions by secrets,
+collected pickups (health/ammo/weapons/keys/treasure), normal score, then speed.
+It warm-starts from existing `demos/eXmY.dm`, persists the exact winning policy,
+and only overwrites a demo when the result is better. Each command chooses and
+prints a fresh search seed, so repeating the same command explores new
+candidates. Set `SEARCH_SEED=<printed-number>` (or `--search-seed`) to reproduce
+a particular search.
 Use `--focus score` (or `FOCUS=score` with make) for the original
 finish/kill/secret point objective instead.
 
@@ -100,6 +104,7 @@ finish/kill/secret point objective instead.
 make gen-demo LEVEL=0 ITERS=100000
 make gen-demos ITERS=50000 THREADS=8
 make gen-demo LEVEL=0 ITERS=100000 GOD=1 FOCUS=secrets
+make gen-demo LEVEL=0 ITERS=100000 SEARCH_SEED=123456
 ```
 
 The Makefile still sets the legacy `WOLF3D_*` env vars for play targets; those

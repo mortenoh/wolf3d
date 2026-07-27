@@ -8,7 +8,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::ai::{self, Policy, SearchFocus};
 use crate::demorec;
@@ -24,6 +24,8 @@ pub struct ForgeOptions {
     pub threads: usize,
     pub max_secs: f32,
     pub progress_every: u64,
+    /// Salt for the candidate stream. `None` chooses a fresh seed per command.
+    pub search_seed: Option<u64>,
     pub god: bool,
     pub focus: SearchFocus,
 }
@@ -40,6 +42,7 @@ impl Default for ForgeOptions {
             threads,
             max_secs: 120.0,
             progress_every: 0, // filled in run() if 0
+            search_seed: None,
             god: false,
             focus: SearchFocus::Secrets,
         }
@@ -61,6 +64,7 @@ pub fn run(mut opts: ForgeOptions) -> i32 {
     if opts.progress_every == 0 {
         opts.progress_every = (opts.iters / 25).max(200);
     }
+    let search_seed = opts.search_seed.unwrap_or_else(fresh_search_seed);
     let max_tics = (opts.max_secs / TIC).ceil() as u32;
     std::fs::create_dir_all(&opts.out_dir).expect("create demos dir");
 
@@ -80,6 +84,7 @@ pub fn run(mut opts: ForgeOptions) -> i32 {
             SearchFocus::Secrets => "secrets first",
         }
     );
+    println!("  search seed: {search_seed}  (fresh candidates each run; pass it to reproduce)");
     println!("  score: finish +100, kill +10, secret +1  (faster wins ties)");
     println!();
 
@@ -111,6 +116,7 @@ pub fn run(mut opts: ForgeOptions) -> i32 {
             opts.threads,
             max_tics,
             opts.progress_every,
+            level_search_seed(search_seed, level_idx),
             opts.god,
             opts.focus,
         ) {
@@ -201,6 +207,7 @@ fn generate_one(
     threads: usize,
     max_tics: u32,
     progress_every: u64,
+    search_seed: u64,
     god: bool,
     focus: SearchFocus,
 ) -> Result<(PathBuf, ai::TrialResult, WriteStatus), String> {
@@ -224,7 +231,7 @@ fn generate_one(
 
     let mut game = Game::new(level_idx);
     let mut best = warm.clone().unwrap_or_else(|| {
-        let mut policy = Policy::full_clear(1);
+        let mut policy = Policy::full_clear(search_seed as u32);
         configure_policy(&mut policy, god, focus);
         let mut result = ai::run_trial(&mut game, level_idx, policy, max_tics, false);
         focus.rank(&mut result);
@@ -237,6 +244,7 @@ fn generate_one(
         threads,
         max_tics,
         progress_every,
+        search_seed,
         Some(best.clone()).filter(|b| b.completed),
         god,
         focus,
@@ -271,6 +279,9 @@ fn generate_one(
 
     let status = if warm.as_ref().is_none_or(|w| best.fitness > w.fitness) {
         let demo = best.demo.clone().ok_or("completed trial missing demo")?;
+        if demo.clear_actors || demo.has_direct_turns() || (!god && demo.god) {
+            return Err("refusing to write a cheated or direct-turn forge demo".into());
+        }
         demo.write_to(&path_out)
             .map_err(|e| format!("write {}: {e}", path_out.display()))?;
         WriteStatus::Improved
@@ -282,6 +293,24 @@ fn generate_one(
     };
 
     Ok((path_out, best, status))
+}
+
+fn fresh_search_seed() -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    (nanos as u64) ^ ((nanos >> 64) as u64) ^ u64::from(std::process::id()).rotate_left(32)
+}
+
+fn level_search_seed(search_seed: u64, level_idx: usize) -> u64 {
+    let mut z = search_seed
+        ^ (level_idx as u64)
+            .wrapping_add(1)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 fn configure_policy(policy: &mut Policy, god: bool, focus: SearchFocus) {
@@ -307,10 +336,7 @@ fn load_warm_start(
     }
     // Legacy generator shortcuts are not forge champions. Mortal mode also
     // never warm-starts from a god recording.
-    if demo.clear_actors
-        || (!god && demo.god)
-        || demo.tics.iter().any(|input| input.turn_delta != 0.0)
-    {
+    if demo.clear_actors || (!god && demo.god) || demo.has_direct_turns() {
         return None;
     }
     let mut result = ai::evaluate_demo(demo)?;

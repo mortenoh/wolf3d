@@ -889,6 +889,11 @@ enum Command {
         #[arg(long)]
         progress: Option<u64>,
 
+        /// Candidate-stream seed. Omit for fresh candidates; pass a printed
+        /// seed to reproduce a prior search exactly.
+        #[arg(long = "search-seed")]
+        search_seed: Option<u64>,
+
         /// Make searched and recorded runs invulnerable.
         #[arg(long)]
         god: bool,
@@ -931,6 +936,7 @@ fn main() {
         threads,
         max_secs,
         progress,
+        search_seed,
         god,
         focus,
     }) = cli.command
@@ -952,6 +958,7 @@ fn main() {
             threads,
             max_secs,
             progress_every: progress.unwrap_or(0),
+            search_seed,
             god,
             focus: match focus {
                 ForgeFocusArg::Score => wolf3d::ai::SearchFocus::Score,
@@ -1014,6 +1021,11 @@ fn main() {
             eprintln!("play-demo: {e}");
             std::process::exit(1);
         });
+        if recorded.has_direct_turns() {
+            eprintln!(
+                "play-demo: warning: legacy direct-turn recording; movement may snap (forge replacements use turn keys)"
+            );
+        }
         game.start_attract_demo(&recorded);
         println!(
             "play-demo: {} ({} tics) — any key returns to the menu",

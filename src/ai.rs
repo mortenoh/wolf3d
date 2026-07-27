@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::actors::Kind;
-use crate::demorec::Demo;
+use crate::demorec::{AiPolicy as RecordedAiPolicy, Demo};
 use crate::game::{Game, GameScreen, Input, TIC, WEAPON_CHAINGUN};
 use crate::hud::{KEY_GOLD, KEY_SILVER};
 use crate::raycast::{Bonus, World};
@@ -147,6 +147,37 @@ impl Policy {
             panic_health: 30,
             hunt_kills: true,
             seek_secrets: true,
+            god: false,
+        }
+    }
+}
+
+impl From<&Policy> for RecordedAiPolicy {
+    fn from(policy: &Policy) -> Self {
+        Self {
+            seed: policy.seed,
+            engage_range: policy.engage_range,
+            aim_slack: policy.aim_slack,
+            strafe_period: policy.strafe_period,
+            strafe_left_bias: policy.strafe_left_bias,
+            panic_health: policy.panic_health,
+            hunt_kills: policy.hunt_kills,
+            seek_secrets: policy.seek_secrets,
+        }
+    }
+}
+
+impl From<&RecordedAiPolicy> for Policy {
+    fn from(policy: &RecordedAiPolicy) -> Self {
+        Self {
+            seed: policy.seed,
+            engage_range: policy.engage_range,
+            aim_slack: policy.aim_slack,
+            strafe_period: policy.strafe_period,
+            strafe_left_bias: policy.strafe_left_bias,
+            panic_health: policy.panic_health,
+            hunt_kills: policy.hunt_kills,
+            seek_secrets: policy.seek_secrets,
             god: false,
         }
     }
@@ -1329,6 +1360,7 @@ pub fn run_trial(
     let mut demo = if record {
         let mut d = Demo::begin(game);
         d.clear_actors = false;
+        d.ai_policy = Some((&policy).into());
         Some(d)
     } else {
         None
@@ -1405,11 +1437,12 @@ pub fn evaluate_demo(demo: Demo) -> Option<TrialResult> {
     let level_idx = demo.level_idx;
     let mut game = Game::new(level_idx);
     game.load_demo_state(&demo);
-    let policy = Policy {
-        seed: demo.rng_index as u32,
-        god: demo.god,
-        ..Policy::speedrun(demo.rng_index as u32)
-    };
+    let mut policy = demo
+        .ai_policy
+        .as_ref()
+        .map(Policy::from)
+        .unwrap_or_else(|| Policy::speedrun(demo.rng_index as u32));
+    policy.god = demo.god;
     let n = demo.tics.len();
     for (i, input) in demo.tics.iter().enumerate() {
         if game.screen != GameScreen::Playing {
@@ -1447,6 +1480,7 @@ pub fn search_level(
     threads: usize,
     max_tics: u32,
     progress_every: u64,
+    search_seed: u64,
     warm: Option<TrialResult>,
     god: bool,
     focus: SearchFocus,
@@ -1479,6 +1513,7 @@ pub fn search_level(
         &counter,
         &completed,
         iters,
+        search_seed,
         god,
         focus,
     );
@@ -1495,6 +1530,7 @@ pub fn search_level(
         &counter,
         &completed,
         iters,
+        search_seed,
         god,
         focus,
     );
@@ -1512,7 +1548,8 @@ pub fn search_level(
             .saturating_add(140)
             .min(max_tics)
             .max(champion.tics.saturating_add(35));
-        let recorded = run_trial(&mut game, level_idx, champion.policy.clone(), cap, true);
+        let mut recorded = run_trial(&mut game, level_idx, champion.policy.clone(), cap, true);
+        focus.rank(&mut recorded);
         if recorded.completed && recorded.fitness >= champion.fitness {
             champion = recorded;
         }
@@ -1567,6 +1604,7 @@ fn run_scatter(
     counter: &Arc<AtomicU64>,
     completed: &Arc<AtomicU64>,
     total_display: u64,
+    search_seed: u64,
     god: bool,
     focus: SearchFocus,
 ) {
@@ -1590,15 +1628,16 @@ fn run_scatter(
                 let mut game = Game::new(level_idx);
                 for s in (t as u32..48).step_by(threads) {
                     let cap = live_cap(&best_tics, max_tics);
-                    let policy = focus
-                        .configure(Policy::speedrun(s.wrapping_mul(7919).wrapping_add(1)), god);
+                    let seed = search_trial_id(search_seed, u64::from(s)) as u32;
+                    let policy = focus.configure(Policy::speedrun(seed), god);
                     let mut r = run_trial(&mut game, level_idx, policy, cap, false);
                     focus.rank(&mut r);
                     consider_best(&best, &best_tics, &completed, r);
                     counter.fetch_add(1, Ordering::Relaxed);
                 }
                 for i in start..end {
-                    let policy = focus.configure(Policy::from_trial(i), god);
+                    let trial_id = search_trial_id(search_seed, i.wrapping_add(48));
+                    let policy = focus.configure(Policy::from_trial(trial_id), god);
                     let cap = live_cap(&best_tics, max_tics);
                     let mut result = run_trial(&mut game, level_idx, policy, cap, false);
                     focus.rank(&mut result);
@@ -1630,6 +1669,7 @@ fn run_climb(
     counter: &Arc<AtomicU64>,
     completed: &Arc<AtomicU64>,
     total_display: u64,
+    search_seed: u64,
     god: bool,
     focus: SearchFocus,
 ) {
@@ -1662,8 +1702,11 @@ fn run_climb(
                     {
                         local = g.policy.clone();
                     }
-                    let policy =
-                        focus.configure(local.mutate(i.wrapping_add(t as u64 * 0x10000)), god);
+                    let mutation = search_trial_id(
+                        search_seed ^ 0xD1B5_4A32_D192_ED03,
+                        i.wrapping_add(t as u64 * 0x10000),
+                    );
+                    let policy = focus.configure(local.mutate(mutation), god);
                     let cap = live_cap(&best_tics, max_tics);
                     let mut result = run_trial(&mut game, level_idx, policy.clone(), cap, false);
                     focus.rank(&mut result);
@@ -1690,6 +1733,18 @@ fn run_climb(
             });
         }
     });
+}
+
+/// SplitMix64-style deterministic mixing. A new forge `search_seed` produces a
+/// disjoint-looking trial stream while an explicitly repeated seed remains
+/// reproducible.
+fn search_trial_id(search_seed: u64, trial: u64) -> u64 {
+    let mut z = search_seed
+        .wrapping_add(trial.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+        .wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 fn maybe_progress(
@@ -2259,7 +2314,7 @@ mod multi_goal_smoke {
 
     #[test]
     fn e1m1_secret_policy_activates_a_pushwall() {
-        let result = search_level(0, 50, 4, 70 * 180, 0, None, false, SearchFocus::Secrets);
+        let result = search_level(0, 50, 4, 70 * 180, 0, 1, None, false, SearchFocus::Secrets);
         assert!(
             result.secrets >= 1,
             "secret-focused policy found {}/{} secrets",

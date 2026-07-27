@@ -3,7 +3,7 @@
 //! title -> credits -> scores -> demo -> title attract cycle, and the shipped
 //! `demos/` recordings.
 
-use wolf3d::demorec::{self, Demo};
+use wolf3d::demorec::{self, AiPolicy, Demo};
 use wolf3d::fb::Framebuffer;
 use wolf3d::game::{
     ATTRACT_CREDITS_SECS, ATTRACT_SCORES_SECS, ATTRACT_TITLE_SECS, Game, GameScreen, Input,
@@ -140,7 +140,17 @@ fn assert_states_match(a: &Game, b: &Game) {
 
 #[test]
 fn demo_format_roundtrips() {
-    let (demo, _) = record_fight();
+    let (mut demo, _) = record_fight();
+    demo.ai_policy = Some(AiPolicy {
+        seed: 0x1234_5678,
+        engage_range: 7.5,
+        aim_slack: 0.25,
+        strafe_period: 17,
+        strafe_left_bias: false,
+        panic_health: 29,
+        hunt_kills: false,
+        seek_secrets: true,
+    });
     let bytes = demo.to_bytes();
     let loaded = Demo::from_bytes(&bytes).expect("parse recorded demo");
     assert_eq!(loaded.level_idx, demo.level_idx);
@@ -156,6 +166,7 @@ fn demo_format_roundtrips() {
     assert_eq!(loaded.keys, demo.keys);
     assert_eq!(loaded.god, demo.god);
     assert_eq!(loaded.windowed, demo.windowed);
+    assert_eq!(loaded.ai_policy, demo.ai_policy);
     assert_eq!(loaded.tics.len(), demo.tics.len());
     // The parsed inputs re-serialize to the identical byte stream.
     assert_eq!(loaded.to_bytes(), bytes, "roundtrip must be byte-identical");
@@ -446,5 +457,23 @@ fn shipped_demos_load_and_replay() {
             "demo should return to the title when finished"
         );
         assert!(game.health > 0, "the shipped demo must survive its run");
+    }
+}
+
+#[test]
+fn automatic_attract_rotation_excludes_legacy_shortcuts() {
+    let mut game = Game::new(0);
+    game.load_attract_demos();
+    assert!(!game.demos.is_empty());
+    for demo in &game.demos {
+        assert!(!demo.god, "automatic attract demo must be mortal");
+        assert!(
+            !demo.clear_actors,
+            "automatic attract demo must retain enemies"
+        );
+        assert!(
+            !demo.has_direct_turns(),
+            "automatic attract demo must use normal-rate turn keys"
+        );
     }
 }

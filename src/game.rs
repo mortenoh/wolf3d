@@ -766,7 +766,7 @@ impl Game {
             // Legacy generator output may carry god mode or erase every
             // actor. Keep those files available for explicit debugging, but
             // never present them as normal attract-mode play.
-            .filter(|d| d.variant == want && !d.god && !d.clear_actors)
+            .filter(|d| d.variant == want && !d.god && !d.clear_actors && !d.has_direct_turns())
             .collect();
     }
 
