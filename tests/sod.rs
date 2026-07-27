@@ -12,8 +12,8 @@ use std::collections::{HashSet, VecDeque};
 use wolf3d::actors::Kind;
 use wolf3d::assets::{MapSet, VSwap, VgaGraph, data_dir};
 use wolf3d::fb::Framebuffer;
-use wolf3d::raycast::World;
 use wolf3d::game::{Game, GameScreen, Input, WEAPON_CHAINGUN};
+use wolf3d::raycast::World;
 use wolf3d::variant::Variant;
 
 const DT: f32 = 1.0 / 70.0;
