@@ -435,7 +435,7 @@ impl Brain {
             if game.keys & need != 0 {
                 continue;
             }
-            if nearest_key_tile(game, need).is_none() {
+            if nearest_reachable_key_tile(game, need).is_none() {
                 continue;
             }
             if elev_reachable(game, game.keys | need) {
@@ -688,7 +688,7 @@ impl Brain {
         match self.goal {
             Goal::Elevator => self.replan_elevator(game, start),
             Goal::Key(k) => {
-                if let Some(kt) = nearest_key_tile(game, k) {
+                if let Some(kt) = nearest_reachable_key_tile(game, k) {
                     // Keys often sit on non-walkable tiles — stand on a neighbor.
                     let stand = nearest_stand(game, start, kt).unwrap_or(kt);
                     self.path = bfs_path(game, start, stand).unwrap_or_default();
@@ -852,7 +852,10 @@ impl Brain {
 
         let mut best: Option<(f32, f32, f32, i32)> = None; // dist2, x, y, priority
         for a in &game.actors.list {
-            if a.dead {
+            // Pac-Man ghosts and spectres are environmental hazards: shots
+            // cannot kill them. Targeting one makes the bot back into a wall
+            // and fire forever instead of navigating around it.
+            if a.dead || a.kind.is_ghost() {
                 continue;
             }
             let d2 = (a.x - px).powi(2) + (a.y - py).powi(2);
@@ -1569,21 +1572,23 @@ fn run_scatter(
             let completed = Arc::clone(completed);
             let start = t as u64 * chunk;
             let end = ((t as u64 + 1) * chunk).min(iters);
-            if start >= end {
+            // Every worker takes a stripe of the deterministic speed probes.
+            // Previously all 48 ran serially on worker zero, making even a
+            // tiny forge request spend most of its time before the search.
+            let has_probe = t < 48;
+            if start >= end && !has_probe {
                 continue;
             }
             scope.spawn(move || {
                 let mut game = Game::new(level_idx);
-                if t == 0 {
-                    for s in 0u32..48 {
-                        let cap = live_cap(&best_tics, max_tics);
-                        let policy = focus
-                            .configure(Policy::speedrun(s.wrapping_mul(7919).wrapping_add(1)), god);
-                        let mut r = run_trial(&mut game, level_idx, policy, cap, false);
-                        focus.rank(&mut r);
-                        consider_best(&best, &best_tics, &completed, r);
-                        counter.fetch_add(1, Ordering::Relaxed);
-                    }
+                for s in (t as u32..48).step_by(threads) {
+                    let cap = live_cap(&best_tics, max_tics);
+                    let policy = focus
+                        .configure(Policy::speedrun(s.wrapping_mul(7919).wrapping_add(1)), god);
+                    let mut r = run_trial(&mut game, level_idx, policy, cap, false);
+                    focus.rank(&mut r);
+                    consider_best(&best, &best_tics, &completed, r);
+                    counter.fetch_add(1, Ordering::Relaxed);
                 }
                 for i in start..end {
                     let policy = focus.configure(Policy::from_trial(i), god);
@@ -2024,12 +2029,49 @@ fn has_los(world: &World, x0: f32, y0: f32, x1: f32, y1: f32) -> bool {
     true
 }
 
+#[cfg(test)]
 fn nearest_key_tile(game: &Game, key: u8) -> Option<(i32, i32)> {
     nearest_bonus(game, |b| match (key, b) {
         (k, Bonus::Key1) if k & KEY_GOLD != 0 => true,
         (k, Bonus::Key2) if k & KEY_SILVER != 0 => true,
         _ => false,
     })
+}
+
+/// Closest key that can actually be approached with the keys currently held.
+///
+/// Manhattan-nearest is insufficient on maps where the gold key sits behind a
+/// silver door (or vice versa): repeatedly selecting that key produces an
+/// empty path and a frozen bot.
+fn nearest_reachable_key_tile(game: &Game, key: u8) -> Option<(i32, i32)> {
+    let start = tile_of(game);
+    let mut best: Option<(usize, (i32, i32))> = None;
+    for s in &game.world.statics {
+        if s.picked {
+            continue;
+        }
+        let matches_key = matches!(
+            (key, s.bonus),
+            (k, Some(Bonus::Key1)) if k & KEY_GOLD != 0
+        ) || matches!(
+            (key, s.bonus),
+            (k, Some(Bonus::Key2)) if k & KEY_SILVER != 0
+        );
+        if !matches_key {
+            continue;
+        }
+        let target = (s.x.floor() as i32, s.y.floor() as i32);
+        let Some(stand) = nearest_stand(game, start, target) else {
+            continue;
+        };
+        let cost = bfs_path(game, start, stand)
+            .map(|path| path.len())
+            .unwrap_or(usize::MAX);
+        if best.map(|(old, _)| cost < old).unwrap_or(true) {
+            best = Some((cost, target));
+        }
+    }
+    best.map(|(_, target)| target)
 }
 
 fn nearest_ammo_tile(game: &Game) -> Option<(i32, i32)> {
@@ -2150,10 +2192,10 @@ fn nearest_stand(game: &Game, start: (i32, i32), goal: (i32, i32)) -> Option<(i3
 }
 
 fn first_missing_key(game: &Game) -> Option<u8> {
-    if game.keys & KEY_GOLD == 0 && nearest_key_tile(game, KEY_GOLD).is_some() {
+    if game.keys & KEY_GOLD == 0 && nearest_reachable_key_tile(game, KEY_GOLD).is_some() {
         return Some(KEY_GOLD);
     }
-    if game.keys & KEY_SILVER == 0 && nearest_key_tile(game, KEY_SILVER).is_some() {
+    if game.keys & KEY_SILVER == 0 && nearest_reachable_key_tile(game, KEY_SILVER).is_some() {
         return Some(KEY_SILVER);
     }
     None
@@ -2247,7 +2289,10 @@ mod multi_goal_smoke {
     #[test]
     #[ignore = "diagnostic map probe"]
     fn probe_fail_levels() {
-        let fails = [7, 8, 11, 17, 18, 21, 23, 27, 28, 29, 34, 36, 37, 38, 53];
+        let fails = [
+            7, 8, 11, 12, 17, 18, 21, 22, 23, 27, 28, 29, 34, 36, 37, 38, 43, 44, 46, 47, 50, 51,
+            53, 54, 55, 56, 57, 58, 59,
+        ];
         for &level in &fails {
             let mut game = Game::new(level);
             game.prepare_ai_run(level, 1);
@@ -2276,10 +2321,12 @@ mod multi_goal_smoke {
             }
             let gold = nearest_key_tile(&game, KEY_GOLD);
             let silver = nearest_key_tile(&game, KEY_SILVER);
+            let reachable_gold = nearest_reachable_key_tile(&game, KEY_GOLD);
+            let reachable_silver = nearest_reachable_key_tile(&game, KEY_SILVER);
             let secrets = nearest_secret(&game, &HashSet::new()).is_some();
             let name = format!("e{}m{}", level / 10 + 1, level % 10 + 1);
             eprintln!(
-                "{name}: elevs={} path0={elev_path} pathKeys={elev_keys} elevLen={elev_len} gold={gold:?} silver={silver:?} secret={secrets} enemies={}",
+                "{name}: elevs={} path0={elev_path} pathKeys={elev_keys} elevLen={elev_len} gold={gold:?}/{reachable_gold:?} silver={silver:?}/{reachable_silver:?} secret={secrets} enemies={}",
                 elevs.len(),
                 remaining_enemies(&game).count()
             );

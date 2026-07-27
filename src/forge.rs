@@ -231,22 +231,6 @@ fn generate_one(
         result
     });
 
-    // Seed with a mix of full-clear and any% policies.
-    for s in 1u32..32 {
-        let seed = s.wrapping_mul(1103515245).wrapping_add(12345);
-        let mut policy = if s.is_multiple_of(4) {
-            Policy::speedrun(seed)
-        } else {
-            Policy::full_clear(seed)
-        };
-        configure_policy(&mut policy, god, focus);
-        let mut r = ai::run_trial(&mut game, level_idx, policy, max_tics, false);
-        focus.rank(&mut r);
-        if r.fitness > best.fitness {
-            best = r;
-        }
-    }
-
     let searched = ai::search_level(
         level_idx,
         iters,
