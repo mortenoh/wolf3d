@@ -285,13 +285,13 @@ impl Menu {
 
     /// DrawGun (WL_MENU.C): place the gun cursor at (`x`, `y`).
     ///
-    /// The cursor pics paint empty space as [`Colors::bkgd`] (the window fill),
-    /// not true transparency. The original first clears a 25x16 pad with that
-    /// color so the empty pixels vanish over the window; we also skip those
-    /// pixels when blitting so the gun sits cleanly when it straddles the
-    /// window edge onto the brighter border (Sound menu Off rows).
+    /// Cursor pics store empty space as solid [`Colors::bkgd`] (window fill),
+    /// not a real alpha channel. Over the window that matches and disappears;
+    /// over the brighter screen border it shows as a dark rectangle. Skip those
+    /// pixels so only the gun silhouette is drawn (the original cleared a
+    /// BKGDCOLOR pad first — fine inside the window, wrong when the cursor
+    /// hangs past the Sound menu's last rows onto the border).
     fn draw_gun(&self, fb: &mut Framebuffer, x: i32, y: i32) {
-        bar(fb, x - 1, y, 25, 16, self.colors.bkgd);
         blit_masked(
             fb,
             self.cursor_frame(),
