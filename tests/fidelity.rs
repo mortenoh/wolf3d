@@ -374,6 +374,47 @@ fn death_fizzle_game_over_leaves_play() {
     );
 }
 
+/// After the dissolve finishes, any key skips the remaining solid-red hold
+/// (WL_GAME.C Died / IN_UserInput(100)).
+#[test]
+fn death_hold_skippable_after_fizzle() {
+    let mut game = Game::new(0);
+    game.lives = 2;
+    game.health = 0;
+    game.update(DT, &Input::default());
+    assert_eq!(game.screen, GameScreen::Death);
+
+    // Drive the dissolve to completion without skipping.
+    let dissolve_tics = 131_071 / fizzle::FIZZLE_PIX_PER_FRAME + 5;
+    for _ in 0..dissolve_tics {
+        game.update(DT, &Input::default());
+        if game.screen != GameScreen::Death {
+            break;
+        }
+    }
+    assert_eq!(
+        game.screen,
+        GameScreen::Death,
+        "still on Death during/just after dissolve"
+    );
+
+    // One any_key tic should end the hold immediately.
+    game.update(
+        DT,
+        &Input {
+            any_key: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        game.screen,
+        GameScreen::Playing,
+        "any_key after fizzle should skip the red hold and respawn"
+    );
+    assert_eq!(game.health, 100);
+    assert_eq!(game.ammo, 8);
+}
+
 /// Opening a door links the floor areas on either side immediately (WL_ACT1.C
 /// DoorOpening connects on the first open frame), and closing fully unlinks them.
 #[test]

@@ -134,6 +134,9 @@ fn sod_sfx_remap(wl6: usize) -> Option<usize> {
     Some(match wl6 {
         s::HITWALLSND => 0,
         s::SELECTITEMSND => 2,
+        // HEARTBEATSND is unused by the WL6 game loop; the Angel of Death
+        // A_Breathing action emits it so SOD can play ANGELTIREDSND (80).
+        s::HEARTBEATSND => 80,
         s::MOVEGUN2SND => 4,
         s::MOVEGUN1SND => 5,
         s::NOWAYSND => 6,

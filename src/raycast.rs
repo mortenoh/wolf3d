@@ -85,8 +85,11 @@ fn tile(level: &Level, x: i32, y: i32) -> u16 {
 // DOORS + AREA CONNECTIVITY (WL_ACT1.C)
 // =============================================================================
 
-const DOOR_OPEN_TIME: f32 = 0.9; // seconds edge-to-edge, ~64 tics at 70Hz
-const DOOR_HOLD_TIME: f32 = 4.3; // ~300 tics before auto-close
+/// Door open duration: original advances `doorposition` by `tics << 10` to
+/// 0xffff (~64 tics at 70 Hz).
+const DOOR_OPEN_TIME: f32 = 64.0 / 70.0;
+/// OPENTICS = 300 hold before auto-close.
+const DOOR_HOLD_TIME: f32 = 300.0 / 70.0;
 /// A door must be nearly fully open before you can walk through.
 const DOOR_PASSABLE: f32 = 0.9;
 
@@ -1004,7 +1007,8 @@ pub struct Player {
     pub angle: f32,
 }
 
-const PLAYER_RADIUS: f32 = 0.25;
+/// WL_DEF.H `MINDIST` / `PLAYERSIZE` (0x5800 global units → tiles).
+const PLAYER_RADIUS: f32 = 0x5800 as f32 / 65536.0;
 
 /// Plane-1 spawn markers 19..=22 = player start facing N, E, S, W.
 pub fn find_spawn(level: &Level) -> Player {

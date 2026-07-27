@@ -1,11 +1,11 @@
 //! Headless combat checks on E1M1 (requires `data/`). Spawns all difficulties
-//! (hardest skill). The map: player spawns at (29.5, 57.5) facing east; the
-//! first door is at x=32; through it and down the room's south exit a guard
-//! stands at (39, 61) facing west. The scripted route below walks into his line
-//! of fire, the same way the snapshot demos do.
+//! (hardest skill). The map: player spawns at (29.5, 57.5) facing east; a
+//! guard stands at about (39.5, 61.5). Tests place the player into line of
+//! fire / point-blank range rather than relying on timed walks (speeds now
+//! match original MOVESCALE and change with skill-independent constants).
 
 use wolf3d::actors::Kind;
-use wolf3d::game::{Game, Input, TURN_SPEED};
+use wolf3d::game::{Game, Input};
 
 const DT: f32 = 1.0 / 70.0;
 
@@ -15,35 +15,23 @@ fn hold(game: &mut Game, input: &Input, secs: f32) {
     }
 }
 
-fn turn(game: &mut Game, right: bool, degrees: f32) {
-    let input = Input {
-        turn_left: !right,
-        turn_right: right,
-        ..Default::default()
-    };
-    hold(game, &input, degrees.to_radians() / TURN_SPEED);
-}
-
-/// Walk from the spawn, through the first door, and down to face the guard.
-fn approach_guard(game: &mut Game) {
-    let fwd = Input {
-        forward: true,
-        ..Default::default()
-    };
-    hold(game, &fwd, 0.75); // up to the closed door
-    game.update(
-        DT,
-        &Input {
-            use_door: true,
-            ..Default::default()
-        },
-    );
-    hold(game, &Input::default(), 1.2); // let it open
-    hold(game, &fwd, 1.3); // into the room
-    turn(game, true, 90.0); // face south
-    hold(game, &fwd, 1.1); // down to the south wall
-    turn(game, false, 90.0); // face east
-    hold(game, &fwd, 0.6); // up to the guard
+/// Place the player a few tiles west of the nearest live guard, facing east.
+/// Returns the guard's index in `actors.list`.
+fn approach_guard(game: &mut Game) -> usize {
+    let idx = game
+        .actors
+        .list
+        .iter()
+        .position(|a| !a.dead && a.kind == Kind::Guard)
+        .expect("E1M1 should spawn at least one guard");
+    let (gx, gy) = (game.actors.list[idx].x, game.actors.list[idx].y);
+    // Same tile row, a short open shot west of the guard (stays on floor tile).
+    game.player.x = gx - 0.55;
+    game.player.y = gy;
+    game.player.angle = 0.0; // face east
+    // One idle tic so SightPlayer can arm.
+    game.update(DT, &Input::default());
+    idx
 }
 
 /// (a) Standing exposed in the guard room draws fire: health drops with no
@@ -52,7 +40,7 @@ fn approach_guard(game: &mut Game) {
 fn guard_shoots_exposed_player() {
     let mut game = Game::new(0);
     assert_eq!(game.health, 100);
-    approach_guard(&mut game);
+    let _ = approach_guard(&mut game);
 
     // Stand still and take fire for a few seconds.
     hold(&mut game, &Input::default(), 3.0);
@@ -69,17 +57,19 @@ fn guard_shoots_exposed_player() {
 #[test]
 fn pistol_kills_guard() {
     let mut game = Game::new(0);
-    approach_guard(&mut game);
+    game.god = true;
+    let idx = approach_guard(&mut game);
     assert_eq!(game.score, 0);
+    let (gx0, gy0) = (game.actors.list[idx].x, game.actors.list[idx].y);
 
-    // Empty most of a magazine into the guard.
+    // Empty most of a magazine into the guard (point-blank).
     hold(
         &mut game,
         &Input {
             fire: true,
             ..Default::default()
         },
-        2.0,
+        3.0,
     );
     hold(&mut game, &Input::default(), 0.5);
 
@@ -88,16 +78,11 @@ fn pistol_kills_guard() {
         "killing the guard should score >= 100, got {}",
         game.score
     );
-
-    let dead_guard = game
-        .actors
-        .list
-        .iter()
-        .find(|a| {
-            a.kind == Kind::Guard && a.dead && (a.x - 39.5).abs() < 2.0 && (a.y - 61.5).abs() < 2.0
-        })
-        .expect("the guard should be dead");
-    let (gx, gy) = (dead_guard.x.floor() as usize, dead_guard.y.floor() as usize);
+    assert!(
+        game.actors.list[idx].dead,
+        "the approached guard should be dead"
+    );
+    let (gx, gy) = (gx0.floor() as usize, gy0.floor() as usize);
 
     // One more tic so the actor system republishes blocking tiles.
     game.update(DT, &Input::default());

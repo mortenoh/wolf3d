@@ -27,8 +27,9 @@
 //! door-intercept vs `doorposition` test.
 //!
 //! Implemented and tested against WOLFSRC: Pac-Man ghosts (E3M10), SOD spectres
-//! with A_Dormant rematerialisation, rocket smoke/boom frames, deathcam via a
-//! death event the game maps to its endgame screens.
+//! with A_Dormant rematerialisation, Angel of Death multi-phase tiredness
+//! (`A_StartAttack` / `A_Relaunch` / `s_angeltired*`), rocket smoke/boom frames,
+//! deathcam via a death event the game maps to its endgame screens.
 
 use crate::assets::maps::{Level, MAP_SIZE};
 use crate::raycast::{Bonus, World};
@@ -182,6 +183,12 @@ enum Action {
     HitlerMorph,
     /// A_Dormant: SOD spectre wake check — rematerialise when the tile is clear.
     Dormant,
+    /// A_StartAttack: Angel of Death volley — reset temp1 rocket counter.
+    StartAttack,
+    /// A_Relaunch: after each Angel rocket, either fire again, tire out, or chase.
+    Relaunch,
+    /// A_Breathing: Angel tired-phase pant sound.
+    Breathing,
 }
 
 /// Rotation mode for a state (WL_ACT2.C `statetype.rotate`).
@@ -341,33 +348,37 @@ impl Kind {
             Kind::Trans | Kind::Uber | Kind::Will | Kind::Death | Kind::Angel
         )
     }
-    /// starthitpoints[gd_hard][kind] from WL_ACT2.C ("death incarnate" tier);
-    /// the real Hitler uses A_HitlerMorph's own table {500,700,800,900}.
-    fn hitpoints(self) -> i32 {
-        match self {
-            Kind::Guard => 25,
-            Kind::Officer => 50,
-            Kind::Ss => 100,
-            Kind::Dog => 1,
-            Kind::Mutant => 65,
-            Kind::Hans => 1200,
-            Kind::Schabbs => 2400,
-            Kind::FakeHitler => 500,
-            Kind::MechaHitler => 1200,
-            Kind::Hitler => 900,
-            Kind::Gretel => 1200,
-            Kind::Gift => 1200,
-            Kind::Fat => 1200,
+    /// `starthitpoints[skill][kind]` from WL_ACT2.C. `skill` is 0 baby .. 3 hard
+    /// (`gd_*`). The real Hitler from `A_HitlerMorph` uses a separate table
+    /// `{500,700,800,900}` — see [`Actors::hitler_morph`].
+    pub fn hitpoints(self, skill: u8) -> i32 {
+        let s = skill.min(3) as usize;
+        // Columns: baby / easy / medium / hard (death incarnate).
+        let row: [i32; 4] = match self {
+            Kind::Guard => [25, 25, 25, 25],
+            Kind::Officer => [50, 50, 50, 50],
+            Kind::Ss => [100, 100, 100, 100],
+            Kind::Dog => [1, 1, 1, 1],
+            Kind::Mutant => [45, 55, 55, 65],
+            Kind::Hans => [850, 950, 1050, 1200],
+            Kind::Schabbs => [850, 950, 1550, 2400],
+            Kind::FakeHitler => [200, 300, 400, 500],
+            Kind::MechaHitler => [800, 950, 1050, 1200],
+            // Morph HP is skill-scaled separately; this is only a fallback.
+            Kind::Hitler => [500, 700, 800, 900],
+            Kind::Gretel => [850, 950, 1050, 1200],
+            Kind::Gift => [850, 950, 1050, 1200],
+            Kind::Fat => [850, 950, 1050, 1200],
             // Ghosts have no FL_SHOOTABLE flag, so hitpoints are never consulted.
-            Kind::Blinky | Kind::Clyde | Kind::Pinky | Kind::Inky => 0,
-            // SOD "death incarnate" tier (WL_ACT2.C starthitpoints[gd_hard]).
-            Kind::Trans => 1200,
-            Kind::Uber => 1400,
-            Kind::Will => 1300,
-            Kind::Death => 1600,
-            Kind::Angel => 2000,
-            Kind::Spectre => 25,
-        }
+            Kind::Blinky | Kind::Clyde | Kind::Pinky | Kind::Inky => [0, 0, 0, 0],
+            Kind::Spectre => [5, 10, 15, 25],
+            Kind::Angel => [1450, 1550, 1650, 2000],
+            Kind::Trans => [850, 950, 1050, 1200],
+            Kind::Uber => [1050, 1150, 1250, 1400],
+            Kind::Will => [950, 1050, 1150, 1300],
+            Kind::Death => [1250, 1350, 1450, 1600],
+        };
+        row[s]
     }
     /// GivePoints on kill (WL_STATE.C KillActor). Bosses score 5000 except the
     /// fake Hitler's 2000.
@@ -1253,11 +1264,11 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
     // Spear of Destiny bosses (WL_ACT2.C under SPEAR), or placeholders under WL6.
     // Sprite bases are the absolute SOD sprite numbers (which already include the
     // +4 static shift). Deliberate simplifications, documented in the module
-    // header: the UberMutant's adjacency melee (T_UShoot) is dropped; Wilhelm /
-    // Death Knight / Angel dodge-and-shoot via the Schabbs chase model; the
-    // Angel's rockets are the generic rocket projectile and its multi-phase
-    // tiredness attack (A_StartAttack / A_Relaunch) is collapsed to a single
-    // volley; the spectre rematerialises via A_Dormant after a 300-tic fade.
+    // header: Wilhelm / Death Knight / Angel dodge-and-shoot via the Schabbs
+    // chase model; the Angel fires the generic rocket projectile with the
+    // multi-phase tiredness attack (A_StartAttack / A_Relaunch / s_angeltired*);
+    // UberMutant adjacency melee (T_UShoot +10) is applied after each chaingun
+    // shot; the spectre rematerialises via A_Dormant after a 300-tic fade.
     let (trans, uber, will, death, angel, spectre);
     if sod {
         // Trans Grosse (s_trans*): Hans-style chaingun bursts (SHOOT1=296).
@@ -1362,20 +1373,96 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
                 (342, 0, A::None),
             ],
         );
-        // Angel of Death (s_angel*): SHOOT1=355, SHOOT2=356; a single volley.
-        angel = push_boss(
-            &mut v,
-            true,
-            351,
-            (10, 3, 8),
-            Think::SchabbChase,
-            &[
-                (355, 10, A::None),
-                (356, 20, A::ThrowRocket),
-                (355, 10, A::None),
-            ],
-            &[
-                (351, 1, A::DeathScream),
+        // Angel of Death (s_angel*): multi-rocket volley with tiredness recovery.
+        // WL_ACT2.C: s_angelshoot1 A_StartAttack -> shoot2 T_Launch -> shoot3
+        // A_Relaunch (temp1==3 -> s_angeltired*, or 50% early return to chase,
+        // else loop shoot2). Tired frames TIRED1=357 / TIRED2=358.
+        angel = {
+            let b = v.len();
+            // stand
+            v.push(State {
+                sprite: 351,
+                rotate: ROT_NONE,
+                tics: 0,
+                think: Think::Stand,
+                action: A::None,
+                next: b,
+            });
+            // chase1, chase1s, chase2, chase3, chase3s, chase4 (T_Will = SchabbChase)
+            let chase0 = b + 1;
+            for &(spr, tics, think) in &[
+                (351u16, 10u16, Think::SchabbChase),
+                (351, 3, Think::None),
+                (352, 8, Think::SchabbChase),
+                (353, 10, Think::SchabbChase),
+                (353, 3, Think::None),
+                (354, 8, Think::SchabbChase),
+            ] {
+                let k = v.len() - chase0;
+                let next = if k + 1 < 6 { chase0 + k + 1 } else { chase0 };
+                v.push(State {
+                    sprite: spr,
+                    rotate: ROT_NONE,
+                    tics,
+                    think,
+                    action: A::None,
+                    next,
+                });
+            }
+            // shoot1..3: A_StartAttack / T_Launch / A_Relaunch (loops to shoot2)
+            let shoot0 = chase0 + 6;
+            v.push(State {
+                sprite: 355,
+                rotate: ROT_NONE,
+                tics: 10,
+                think: Think::None,
+                action: A::StartAttack,
+                next: shoot0 + 1,
+            });
+            v.push(State {
+                sprite: 356,
+                rotate: ROT_NONE,
+                tics: 20,
+                think: Think::None,
+                action: A::ThrowRocket,
+                next: shoot0 + 2,
+            });
+            v.push(State {
+                sprite: 355,
+                rotate: ROT_NONE,
+                tics: 10,
+                think: Think::None,
+                action: A::Relaunch,
+                next: shoot0 + 1, // default: fire again (A_Relaunch may NewState away)
+            });
+            // tired1..7 (A_Breathing on odd frames; last returns to chase1)
+            let tired0 = shoot0 + 3;
+            for (k, &(spr, action)) in [
+                (357u16, A::Breathing),
+                (358, A::None),
+                (357, A::Breathing),
+                (358, A::None),
+                (357, A::Breathing),
+                (358, A::None),
+                (357, A::Breathing),
+            ]
+            .iter()
+            .enumerate()
+            {
+                let next = if k + 1 < 7 { tired0 + k + 1 } else { chase0 };
+                v.push(State {
+                    sprite: spr,
+                    rotate: ROT_NONE,
+                    tics: 40,
+                    think: Think::None,
+                    action,
+                    next,
+                });
+            }
+            // die chain (DigiMode-on 105-tic yell on die01)
+            let die0 = tired0 + 7;
+            for (k, &(spr, tics, action)) in [
+                (351u16, 1u16, A::DeathScream),
                 (351, 105, A::None),
                 (359, 10, A::None),
                 (360, 10, A::None),
@@ -1385,8 +1472,30 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
                 (364, 10, A::None),
                 (365, 10, A::None),
                 (366, 0, A::None),
-            ],
-        );
+            ]
+            .iter()
+            .enumerate()
+            {
+                let next = if k + 1 < 10 { die0 + k + 1 } else { die0 + k };
+                v.push(State {
+                    sprite: spr,
+                    rotate: ROT_NONE,
+                    tics,
+                    think: Think::None,
+                    action,
+                    next,
+                });
+            }
+            KindStates {
+                stand: b,
+                path1: b,
+                chase1: chase0,
+                attack1: shoot0,
+                die1: die0,
+                pain: chase0,
+                pain1: chase0,
+            }
+        };
         // Spectre (ghostobj under SPEAR): wait stand, T_Ghosts chase (SPECTRE_W1
         // =343..346), fade death (F1..F4), then A_Dormant rematerialisation
         // (WL_ACT2.C s_spectrewait / s_spectredie / s_spectrewake).
@@ -1542,6 +1651,8 @@ pub struct Actor {
     flags: u8,
     /// temp2 reaction countdown in tics.
     reaction: f32,
+    /// temp1: Angel of Death rocket-volley counter (A_StartAttack / A_Relaunch).
+    temp1: i32,
     /// True once killed — stops blocking movement and further AI.
     pub dead: bool,
     /// Set by the renderer: was this actor on screen last frame (FL_VISABLE)?
@@ -1570,6 +1681,8 @@ pub struct Actors {
     pub projectiles: Vec<Projectile>,
     /// VSWAP sprite shift for this variant (0 WL6, 4 SOD).
     vswap_shift: u16,
+    /// Active skill (0 baby .. 3 hard); drives spawn HP and A_HitlerMorph.
+    skill: u8,
     table: StateTable,
     rnd: Rnd,
 
@@ -1773,6 +1886,7 @@ impl Actors {
                     waiting_door: None,
                     flags: 0,
                     reaction: 0.0,
+                    temp1: 0,
                     dead: true,
                     visible: false,
                 });
@@ -1799,6 +1913,7 @@ impl Actors {
                     waiting_door: None,
                     flags: FL_AMBUSH,
                     reaction: 0.0,
+                    temp1: 0,
                     dead: false,
                     visible: false,
                 });
@@ -1822,12 +1937,13 @@ impl Actors {
                     dir,
                     state: kd.stand,
                     ticcount: 0.0,
-                    health: kind.hitpoints(),
+                    health: kind.hitpoints(skill),
                     speed: SPD_PATROL,
                     distance: 0.0,
                     waiting_door: None,
                     flags,
                     reaction: 0.0,
+                    temp1: 0,
                     dead: false,
                     visible: false,
                 });
@@ -1853,12 +1969,13 @@ impl Actors {
                     dir: dir * 2, // spawn dir 0..3 -> dirtype east/north/west/south
                     state: if patrol { kd.path1 } else { kd.stand },
                     ticcount: 0.0,
-                    health: kind.hitpoints(),
+                    health: kind.hitpoints(skill),
                     speed,
                     distance: 0.0,
                     waiting_door: None,
                     flags: FL_SHOOTABLE | if ambush { FL_AMBUSH } else { 0 },
                     reaction: 0.0,
+                    temp1: 0,
                     dead: false,
                     visible: false,
                 };
@@ -1884,6 +2001,7 @@ impl Actors {
             list,
             projectiles: Vec::new(),
             vswap_shift: sprite_shift,
+            skill,
             table,
             rnd: Rnd::new(),
             occ: vec![false; MAP_SIZE * MAP_SIZE],
@@ -1992,6 +2110,7 @@ impl Actors {
             w.put_i32(a.waiting_door.map_or(-1, |d| d as i32));
             w.put_u8(a.flags);
             w.put_f32(a.reaction);
+            w.put_i32(a.temp1);
             w.put_bool(a.dead);
             w.put_bool(a.visible);
         }
@@ -2033,6 +2152,7 @@ impl Actors {
             let waiting_door = (wd >= 0).then_some(wd as usize);
             let flags = r.get_u8()?;
             let reaction = r.get_f32()?;
+            let temp1 = r.get_i32()?;
             let dead = r.get_bool()?;
             let visible = r.get_bool()?;
             if state >= self.table.states.len() {
@@ -2053,6 +2173,7 @@ impl Actors {
                 waiting_door,
                 flags,
                 reaction,
+                temp1,
                 dead,
                 visible,
             });
@@ -2324,6 +2445,31 @@ impl Actors {
             Action::FakeFire => self.throw(i, px, py, ProjKind::Fire),
             Action::HitlerMorph => self.hitler_morph(i),
             Action::Dormant => self.a_dormant(i, world, px, py),
+            Action::StartAttack => {
+                // A_StartAttack (WL_ACT2.C): reset the Angel rocket counter.
+                self.list[i].temp1 = 0;
+            }
+            Action::Relaunch => self.a_relaunch(i),
+            Action::Breathing => {
+                // A_Breathing: ANGELTIREDSND on SOD (HEARTBEATSND remapped).
+                self.sounds.push(snd::HEARTBEATSND as u8);
+            }
+        }
+    }
+
+    /// A_Relaunch (WL_ACT2.C): after each Angel rocket, count to 3 then tire out;
+    /// otherwise a 50% chance to abort the volley and resume chase.
+    fn a_relaunch(&mut self, i: usize) {
+        self.list[i].temp1 += 1;
+        if self.list[i].temp1 == 3 {
+            // s_angeltired is attack1 + 3 (shoot1/2/3 then tired1..).
+            let tired = self.table.kinds[Kind::Angel.index()].attack1 + 3;
+            self.new_state(i, tired);
+            return;
+        }
+        if self.rnd.roll() & 1 != 0 {
+            let chase = self.table.kinds[Kind::Angel.index()].chase1;
+            self.new_state(i, chase);
         }
     }
 
@@ -2903,11 +3049,14 @@ impl Actors {
         if !check_line(world, a.x, a.y, px, py) {
             return;
         }
-        self.sounds.push(shoot_sound(a.kind));
-        let dx = (a.tilex - ptx).abs();
-        let dy = (a.tiley - pty).abs();
+        let kind = a.kind;
+        let atx = a.tilex;
+        let aty = a.tiley;
+        self.sounds.push(shoot_sound(kind));
+        let dx = (atx - ptx).abs();
+        let dy = (aty - pty).abs();
         let mut dist = dx.max(dy);
-        if a.kind == Kind::Ss || a.kind == Kind::Hans {
+        if kind == Kind::Ss || kind == Kind::Hans {
             dist = dist * 2 / 3; // "ss are better shots" (T_Shoot)
         }
         let visible = a.visible;
@@ -2931,6 +3080,10 @@ impl Actors {
                 self.rnd.roll() >> 4
             };
             self.damage += damage as i32;
+        }
+        // T_UShoot (WL_ACT2.C): UberMutant also deals fixed melee when adjacent.
+        if kind == Kind::Uber && dx.max(dy) <= 1 {
+            self.damage += 10;
         }
     }
 
@@ -3130,9 +3283,10 @@ impl Actors {
             }
         }
         let kd = self.table.kinds[Kind::Spectre.index()];
+        let skill = self.skill;
         let a = &mut self.list[i];
         a.dead = false;
-        a.health = Kind::Spectre.hitpoints();
+        a.health = Kind::Spectre.hitpoints(skill);
         a.flags |= FL_SHOOTABLE | FL_AMBUSH;
         a.flags &= !FL_ATTACKMODE;
         a.dir = NODIR;
@@ -3173,11 +3327,13 @@ impl Actors {
 
     /// A_HitlerMorph: the mecha suit's death spawns the real Hitler in place,
     /// inheriting position, direction and combat state, at SPDPATROL*5 with
-    /// the morph table's hard-tier 900 hitpoints.
+    /// the morph table `{500,700,800,900}` by skill (WL_ACT2.C).
     fn hitler_morph(&mut self, i: usize) {
         let kd = self.table.kinds[Kind::Hitler.index()];
         let src = &self.list[i];
         let state = kd.chase1;
+        // A_HitlerMorph local table — not starthitpoints[] (en_hitler is mecha).
+        let morph_hp = [500, 700, 800, 900][self.skill.min(3) as usize];
         let actor = Actor {
             kind: Kind::Hitler,
             x: src.x,
@@ -3187,12 +3343,13 @@ impl Actors {
             dir: src.dir,
             state,
             ticcount: self.table.states[state].tics as f32,
-            health: Kind::Hitler.hitpoints(),
+            health: morph_hp,
             speed: SPD_PATROL * 5.0,
             distance: src.distance.max(0.0),
             waiting_door: None,
             flags: (src.flags & FL_ATTACKMODE) | FL_SHOOTABLE,
             reaction: 0.0,
+            temp1: 0,
             dead: false,
             visible: false,
         };

@@ -256,6 +256,86 @@ fn sod_killing_the_angel_wins() {
     );
 }
 
+/// Angel of Death multi-phase attack (WL_ACT2.C A_StartAttack / A_Relaunch):
+/// a volley can fire multiple rockets (not a single shot), and a completed
+/// 3-rocket volley enters the tired recovery frames (SPR_ANGEL_TIRED1/2).
+#[test]
+fn sod_angel_multi_rocket_volley_and_tiredness() {
+    if !sod_present() {
+        return;
+    }
+    let mut game = sod_game(20);
+    game.god = true;
+    game.infinite_ammo = true;
+    game.weapon = WEAPON_CHAINGUN;
+    game.ammo = 99;
+    game.actors.list.retain(|a| a.kind == Kind::Angel);
+    let (ax, ay) = game
+        .actors
+        .list
+        .iter()
+        .find(|a| a.kind == Kind::Angel)
+        .map(|a| (a.x, a.y))
+        .expect("an Angel actor");
+    // Open tile south of the Angel (same as the kill test); stay there.
+    game.player.x = ax;
+    game.player.y = ay + 2.0;
+
+    // A short burst wakes the ambush boss (DamageActor -> FirstSighting) without
+    // killing it, then the player idles so the Angel can run full volleys.
+    for _ in 0..40 {
+        if let Some((bx, by)) = game
+            .actors
+            .list
+            .iter()
+            .find(|a| a.kind == Kind::Angel && !a.dead)
+            .map(|a| (a.x, a.y))
+        {
+            let (dx, dy) = (bx - game.player.x, by - game.player.y);
+            game.player.angle = dy.atan2(dx);
+        }
+        game.ammo = 99;
+        game.update(
+            DT,
+            &Input {
+                fire: true,
+                ..Default::default()
+            },
+        );
+    }
+
+    let mut prev_live = 0usize;
+    let mut launches = 0usize;
+    let mut saw_tired = false;
+    for _ in 0..(60.0 / DT) as u32 {
+        game.update(DT, &Input::default());
+        let live = game.actors.projectiles.iter().filter(|p| !p.dead).count();
+        if live > prev_live {
+            launches += live - prev_live;
+        }
+        prev_live = live;
+        if let Some(idx) = game
+            .actors
+            .list
+            .iter()
+            .position(|a| a.kind == Kind::Angel && !a.dead)
+        {
+            let spr = game.actors.sprite_of(idx, game.player.x, game.player.y);
+            if spr == 357 || spr == 358 {
+                saw_tired = true;
+            }
+        }
+    }
+    assert!(
+        launches >= 2,
+        "Angel multi-rocket volley should launch at least 2 rockets, got {launches}"
+    );
+    assert!(
+        saw_tired,
+        "Angel should enter s_angeltired frames (sprites 357/358) after a full volley"
+    );
+}
+
 /// The Spear menu is blue, not WL6's red: WL_MENU.H swaps the 0x2x red window
 /// ramp for the 0x9x blue one, and ClearMScreen paints C_BACKDROPPIC over the
 /// whole screen instead of a flat BORDCOLOR fill.

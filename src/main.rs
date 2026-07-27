@@ -436,77 +436,63 @@ impl App {
             typed: std::mem::take(&mut self.typed),
             backspace: std::mem::take(&mut self.backspace),
         };
-        if self.record_path.is_some() {
-            self.update_recording(dt, input);
-        } else {
-            self.game.update(dt, &input);
-        }
-        self.sync_audio();
-        self.persist_config();
-    }
-
-    /// Fixed-timestep update used while `WOLF3D_RECORD` is armed: the game
-    /// advances in whole 70 Hz tics, the play session's inputs are captured one
-    /// per tic, and a visibility-marking render runs after every play tic so the
-    /// recording's render side effects are embedded at tic granularity (see
-    /// `demorec`'s determinism notes). The demo is written when the session ends
-    /// (death / level exit / Esc back to the menu).
-    fn update_recording(&mut self, dt: f32, mut input: Input) {
-        // Cap the backlog so a stall can't spiral into a huge catch-up burst.
+        // Always advance the simulation in whole 70 Hz tics (original CalcTics).
+        // Edge-triggered inputs and mouse turn apply on the first tic only.
         self.tic_accum = (self.tic_accum + dt).min(0.25);
+        let mut first = true;
         while self.tic_accum >= game::TIC {
             self.tic_accum -= game::TIC;
-            if let Some(d) = &mut self.recording {
-                d.push(&input);
+            let mut tic_input = input;
+            if !first {
+                // Held movement/fire/run stay; one-shots and mouse delta do not
+                // repeat for each catch-up tic (would multi-fire use/menu/turn).
+                tic_input.use_door = false;
+                tic_input.select_weapon = None;
+                tic_input.turn_delta = 0.0;
+                tic_input.menu_up = false;
+                tic_input.menu_down = false;
+                tic_input.menu_left = false;
+                tic_input.menu_right = false;
+                tic_input.menu_enter = false;
+                tic_input.menu_back = false;
+                tic_input.any_key = false;
+                tic_input.typed = None;
+                tic_input.backspace = false;
             }
-            self.game.update(game::TIC, &input);
+            first = false;
 
-            if self.game.screen == GameScreen::Playing {
-                if self.recording.is_none() {
-                    // The play session just started: capture the header at the
-                    // fresh level state, before any recorded tic.
-                    let mut d = Demo::begin(&self.game);
-                    d.windowed = true;
-                    self.recording = Some(d);
-                    println!("WOLF3D_RECORD: recording started");
-                }
-                // Embed this tic's render-visibility marking (playback re-runs
-                // the same marking render after every tic).
-                self.game.render(&mut self.fb);
-            } else if let Some(d) = self.recording.take() {
-                // The session ended (death / level exit / Esc): write the demo.
-                let path = self.record_path.take().expect("record path present");
-                match d.write_to(&path) {
-                    Ok(()) => {
-                        println!(
+            if self.record_path.is_some()
+                && let Some(d) = &mut self.recording
+            {
+                d.push(&tic_input);
+            }
+            self.game.update(game::TIC, &tic_input);
+
+            if self.record_path.is_some() {
+                if self.game.screen == GameScreen::Playing {
+                    if self.recording.is_none() {
+                        let mut d = Demo::begin(&self.game);
+                        d.windowed = true;
+                        self.recording = Some(d);
+                        println!("WOLF3D_RECORD: recording started");
+                    }
+                    // Embed this tic's render-visibility marking for demos.
+                    self.game.render(&mut self.fb);
+                } else if let Some(d) = self.recording.take() {
+                    let path = self.record_path.take().expect("record path present");
+                    match d.write_to(&path) {
+                        Ok(()) => println!(
                             "WOLF3D_RECORD: wrote {} ({} tics)",
                             path.display(),
                             d.tics.len()
-                        )
+                        ),
+                        Err(e) => eprintln!("WOLF3D_RECORD: failed to write demo: {e}"),
                     }
-                    Err(e) => eprintln!("WOLF3D_RECORD: failed to write demo: {e}"),
                 }
-                return;
             }
-
-            // Edge-triggered fields fire on the first tic of the frame only;
-            // held keys persist across the frame's remaining tics.
-            input = Input {
-                use_door: false,
-                select_weapon: None,
-                turn_delta: 0.0,
-                menu_up: false,
-                menu_down: false,
-                menu_left: false,
-                menu_right: false,
-                menu_enter: false,
-                menu_back: false,
-                any_key: false,
-                typed: None,
-                backspace: false,
-                ..input
-            };
         }
+        self.sync_audio();
+        self.persist_config();
     }
 
     /// Write the persistent options (view size, sound, music, mouse sensitivity)

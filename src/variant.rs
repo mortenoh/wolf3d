@@ -48,6 +48,10 @@ pub struct Gfx {
     pub selected: usize,
     /// First of the four difficulty banners (baby/easy/normal/hard).
     pub baby_mode: usize,
+    /// C_MOUSELBACKPIC: looking-up BJ drawn under the difficulty window.
+    pub mouse_lback: usize,
+    /// C_HOWTOUGHPIC (SOD): banner replacing the "How tough are you?" string.
+    pub how_tough: Option<usize>,
     /// First of the six episode banners (WL6 only).
     pub episode1: Option<usize>,
     pub fx_title: usize,
@@ -90,6 +94,8 @@ const GFX_WL6: Gfx = Gfx {
     not_selected: 13,
     selected: 14,
     baby_mode: 19,
+    mouse_lback: 18, // C_MOUSELBACKPIC
+    how_tough: None,
     episode1: Some(30),
     fx_title: 15,
     music_title: 17,
@@ -127,6 +133,8 @@ const GFX_SOD: Gfx = Gfx {
     not_selected: 7,
     selected: 8,
     baby_mode: 21,
+    mouse_lback: 4,      // C_MOUSELBACKPIC
+    how_tough: Some(20), // C_HOWTOUGHPIC
     episode1: None,
     fx_title: 17,
     music_title: 19,

@@ -19,11 +19,14 @@ pub const MAGIC: &[u8; 8] = b"WOLF3DCF";
 /// Current on-disk format version.
 pub const VERSION: u16 = 1;
 
-/// The smallest and largest 3D-view widths, in pixels (multiples of 16). The
-/// original's CP_ChangeView sized `viewwidth` in 16px steps; the full 320-wide
-/// view is the default and the floor is 64.
+/// The smallest and largest 3D-view widths, in pixels (multiples of 16).
+/// CP_ChangeView units are `viewwidth/16` with range 4..=19 (WL_MENU.C), i.e.
+/// 64..=304. Full 320 (unit 20) is allowed as the classic full-width default
+/// so a fresh config still fills the play area.
 pub const MIN_VIEW: usize = 64;
 pub const MAX_VIEW: usize = 320;
+/// Highest size unit CP_ChangeView will step to (original `newview>19` clamp).
+pub const MAX_VIEW_UNIT: usize = 19;
 pub const VIEW_STEP: usize = 16;
 
 /// The mouse-sensitivity slider range (CP_Control): 0..=20.

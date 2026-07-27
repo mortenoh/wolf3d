@@ -22,9 +22,16 @@ use crate::variant::{GameId, Variant};
 /// menu font fits a bit fewer in the slot box).
 pub const SAVE_NAME_MAX: usize = 24;
 
-const MOVE_SPEED: f32 = 3.0; // tiles/sec (Wolf run speed is ~6)
-const RUN_FACTOR: f32 = 2.0;
-pub const TURN_SPEED: f32 = 2.4; // rad/sec
+// Player speeds from WL_PLAY.C / WL_AGENT.C: control * MOVESCALE / TILEGLOBAL
+// at 70 Hz. BASEMOVE=35, RUNMOVE=70, MOVESCALE=150, BACKMOVESCALE=100.
+const WALK_SPEED: f32 = 35.0 * 150.0 * 70.0 / 65536.0; // ~5.61 tiles/s
+const RUN_SPEED: f32 = 70.0 * 150.0 * 70.0 / 65536.0; // ~11.21 tiles/s
+const BACK_WALK_SPEED: f32 = 35.0 * 100.0 * 70.0 / 65536.0; // ~3.74 tiles/s
+const BACK_RUN_SPEED: f32 = 70.0 * 100.0 * 70.0 / 65536.0; // ~7.48 tiles/s
+// BASETURN=35 / RUNTURN=70 units per tic, ANGLESCALE=20, ANGLES=360.
+/// Walk turn rate (rad/s); used by headless demo scripts for degree holds.
+pub const TURN_SPEED: f32 = (35.0 / 20.0) * (std::f32::consts::TAU / 360.0) * 70.0;
+const TURN_RUN: f32 = (70.0 / 20.0) * (std::f32::consts::TAU / 360.0) * 70.0;
 
 /// One frame's worth of player intent.
 #[derive(Default, Clone, Copy)]
@@ -726,7 +733,7 @@ impl Game {
             }
             GameScreen::Intermission => self.update_intermission(dt, input),
             GameScreen::GetPsyched => self.update_get_psyched(dt),
-            GameScreen::Death => self.update_death(dt),
+            GameScreen::Death => self.update_death(dt, input),
             GameScreen::DeathCam => self.update_deathcam(dt, input),
             GameScreen::Victory => self.update_victory(dt, input),
             GameScreen::EndText => self.update_endtext(input),
@@ -1119,17 +1126,20 @@ impl Game {
         }
     }
 
-    fn update_death(&mut self, dt: f32) {
+    fn update_death(&mut self, dt: f32, input: &Input) {
         // Advance the per-pixel dissolve (ID_VH.C FizzleFade, 914 samples/tic).
+        // The dissolve itself is not skippable (original FizzleFade runs out).
         if let Some(fz) = self.death_fizzle.as_mut() {
             fz.advance(dt, TIC);
             if !fz.finished() {
                 return;
             }
         }
-        // Solid red hold (IN_UserInput(100)) after the dissolve completes.
+        // Solid red hold (IN_UserInput(100)): any key ends early after dissolve.
         self.death_hold += dt;
-        if self.death_hold < DEATH_HOLD_SECS {
+        let skip =
+            input.any_key || input.menu_enter || input.menu_back || input.fire || input.use_door;
+        if self.death_hold < DEATH_HOLD_SECS && !skip {
             return;
         }
         self.death_fizzle = None;
@@ -1343,8 +1353,9 @@ impl Game {
                 menu::ITEM_NEW_GAME => {
                     // SOD is a single campaign — New Game goes straight to the
                     // difficulty select; WL6 first picks an episode.
+                    // NewItems.curpos defaults to 2 ("Bring 'em on!").
                     self.episode_sel = 0;
-                    self.diff_sel = 0;
+                    self.diff_sel = Difficulty::Normal.skill() as usize;
                     self.screen = if self.variant.has_episodes {
                         GameScreen::Episode
                     } else {
@@ -1454,16 +1465,19 @@ impl Game {
 
     // --- Change View (WL_MENU.C CP_ChangeView) -----------------------------
 
-    /// Left/right resize the 3D viewport in 16px steps between 64 and 320 wide;
-    /// Esc/Enter returns to the main menu. The change is live-previewed by
-    /// [`Game::render`], which draws the world into the sized rect.
+    /// Left/right resize the 3D viewport in 16px steps (CP_ChangeView units
+    /// 4..=19 → 64..=304). A 320-wide default is kept when loaded from config
+    /// but the menu will not step past unit 19 (original clamp). Esc/Enter
+    /// returns to the main menu with a live-previewed world.
     fn update_change_view(&mut self, input: &Input) {
-        if input.menu_left && self.view_size > MIN_VIEW {
-            self.view_size -= VIEW_STEP;
+        use crate::config::MAX_VIEW_UNIT;
+        let unit = (self.view_size / VIEW_STEP).max(4);
+        if input.menu_left && unit > 4 {
+            self.view_size = (unit - 1) * VIEW_STEP;
             self.sounds.push(snd::HITWALLSND as u8);
         }
-        if input.menu_right && self.view_size < MAX_VIEW {
-            self.view_size += VIEW_STEP;
+        if input.menu_right && unit < MAX_VIEW_UNIT {
+            self.view_size = (unit + 1) * VIEW_STEP;
             self.sounds.push(snd::HITWALLSND as u8);
         }
         if input.menu_back || input.menu_enter {
@@ -1741,7 +1755,8 @@ impl Game {
             return;
         }
         if input.menu_enter {
-            self.diff_sel = self.difficulty.skill() as usize;
+            // Fresh pick each New Game: default to Normal (NewItems.curpos = 2).
+            self.diff_sel = Difficulty::Normal.skill() as usize;
             self.screen = GameScreen::Difficulty;
         }
     }
@@ -1833,19 +1848,17 @@ impl Game {
             }
         }
 
+        let turn = if input.run { TURN_RUN } else { TURN_SPEED };
         if input.turn_left {
-            self.player.angle -= TURN_SPEED * dt;
+            self.player.angle -= turn * dt;
         }
         if input.turn_right {
-            self.player.angle += TURN_SPEED * dt;
+            self.player.angle += turn * dt;
         }
         self.player.angle += input.turn_delta;
 
-        let speed = if input.run {
-            MOVE_SPEED * RUN_FACTOR
-        } else {
-            MOVE_SPEED
-        };
+        // Original uses separate MOVESCALE / BACKMOVESCALE; pure reverse uses the
+        // slower back scale, while forward and strafe share the forward scale.
         let (dx, dy) = (self.player.angle.cos(), self.player.angle.sin());
         let mut mx = 0.0f32;
         let mut my = 0.0f32;
@@ -1868,6 +1881,19 @@ impl Game {
         let len = (mx * mx + my * my).sqrt();
         self.running = len > 0.0 && input.run;
         if len > 0.0 {
+            let pure_back =
+                input.back && !input.forward && !input.strafe_left && !input.strafe_right;
+            let speed = if pure_back {
+                if input.run {
+                    BACK_RUN_SPEED
+                } else {
+                    BACK_WALK_SPEED
+                }
+            } else if input.run {
+                RUN_SPEED
+            } else {
+                WALK_SPEED
+            };
             let (wx, wy) = (mx / len * speed * dt, my / len * speed * dt);
             self.player.walk(&self.world, wx, wy);
         }
@@ -1892,10 +1918,14 @@ impl Game {
             self.running,
             madenoise,
         );
-        let damage = self.actors.take_damage();
+        let mut damage = self.actors.take_damage();
         if damage > 0 {
             // TakeDamage clears the gatling grin and redraws the face.
             self.got_gatling_face = false;
+            // WL_AGENT.C TakeDamage: baby skill divides damage by 4 (`points>>=2`).
+            if self.difficulty == Difficulty::Baby {
+                damage >>= 2;
+            }
         }
         if !self.god {
             self.health -= damage;
@@ -2362,8 +2392,8 @@ impl Game {
                 return;
             }
             GameScreen::ChangeView => {
-                // Live preview: draw the world at the chosen size, then the
-                // caption band over the top.
+                // Live preview at the chosen size, then DrawChangeView's
+                // status-strip instructions (STR_SIZE1/2/3).
                 self.render_world(fb);
                 self.menu.render_change_view(fb, self.view_size);
                 return;

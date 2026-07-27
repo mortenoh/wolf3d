@@ -179,3 +179,109 @@ fn quit_prompt_does_not_perturb_gameplay_rng() {
     };
     assert_eq!(fight(true), fight(false));
 }
+
+/// HandleMenu gun twitch: C_CURSOR1 for 70 tics, brief C_CURSOR2 for 8.
+#[test]
+fn gun_cursor_twitches_with_handlemenu_cadence() {
+    let mut game = Game::new(0);
+    game.to_title();
+    press(
+        &mut game,
+        Input {
+            any_key: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(game.screen, GameScreen::MainMenu);
+
+    // Sample a full 78-tic cycle: rest should dominate (~70/78), twitch the rest.
+    let mut rest = 0u32;
+    let mut twitch = 0u32;
+    for _ in 0..78 {
+        if game.menu.gun_is_twitching() {
+            twitch += 1;
+        } else {
+            rest += 1;
+        }
+        game.update(DT, &Input::default());
+    }
+    assert_eq!(rest, 70, "CURSOR1 rest should be 70 tics/cycle, got {rest}");
+    assert_eq!(
+        twitch, 8,
+        "CURSOR2 twitch should be 8 tics/cycle, got {twitch}"
+    );
+
+    // Twitch window is contiguous (no rest sandwiched inside).
+    let mut saw_edge = false;
+    let mut prev = game.menu.gun_is_twitching();
+    for _ in 0..200 {
+        game.update(DT, &Input::default());
+        let now = game.menu.gun_is_twitching();
+        if now && !prev {
+            // Entered twitch: next 7 tics must stay twitching, 8th leaves.
+            for _ in 0..7 {
+                game.update(DT, &Input::default());
+                assert!(game.menu.gun_is_twitching(), "twitch must be contiguous");
+            }
+            game.update(DT, &Input::default());
+            assert!(
+                !game.menu.gun_is_twitching(),
+                "twitch should end after 8 tics"
+            );
+            saw_edge = true;
+            break;
+        }
+        prev = now;
+    }
+    assert!(
+        saw_edge,
+        "should observe a rest->twitch edge within 200 tics"
+    );
+}
+
+/// Difficulty screen draws the NM skill list + selected BJ face (not just one
+/// centered banner).
+#[test]
+fn difficulty_screen_lists_skills_and_face() {
+    let mut game = Game::new(0);
+    game.to_title();
+    press(
+        &mut game,
+        Input {
+            any_key: true,
+            ..Default::default()
+        },
+    );
+    // New Game -> episode 1 -> difficulty.
+    press(&mut game, enter());
+    press(&mut game, enter());
+    assert_eq!(game.screen, GameScreen::Difficulty);
+
+    let mut fb = Framebuffer::new();
+    game.render(&mut fb);
+
+    // Skill phrases appear as text; sample the baby skill string area near
+    // NM_X+24, NM_Y (50+24, 100) — should not be the flat bord fill.
+    let sample = fb.pixels[100 * 320 + 80];
+    let bord = wolf3d::menu::Colors::for_variant(false).bord();
+    let bord_rgba = wolf3d::assets::palette::PALETTE[bord as usize];
+    assert_ne!(
+        sample, bord_rgba,
+        "difficulty window should paint over the bord clear"
+    );
+
+    // BJ skill face sits at NM_X+185, NM_Y+7 = (235, 107); that cell must differ
+    // from window fill too.
+    let face_px = fb.pixels[110 * 320 + 240];
+    assert_ne!(face_px, bord_rgba, "skill face should be drawn");
+
+    // Cursor down cycles skills without leaving the screen.
+    press(
+        &mut game,
+        Input {
+            menu_down: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(game.screen, GameScreen::Difficulty);
+}

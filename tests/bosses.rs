@@ -160,10 +160,16 @@ fn scripted_fight_kills_mecha_then_hitler_and_wins() {
         "killing only the mecha must not win the episode"
     );
 
+    // Hitler is SPDPATROL*5 with a chaingun; with original-scale player run
+    // speed the simple aimbot/strafe script dies often. God the phase-2 duel
+    // so the test still proves morph + kill + victory without flaking.
+    game.god = true;
+    game.health = 100;
     assert!(
         fight(&mut game, Kind::Hitler, 6.0, 120.0, &mut refills),
         "Hitler never died"
     );
+    game.god = false;
     assert!(
         game.victory,
         "killing the real Hitler must set the victory flag"

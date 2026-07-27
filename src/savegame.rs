@@ -29,9 +29,9 @@ use std::path::PathBuf;
 
 /// File magic: identifies a Wolf3D save.
 pub const MAGIC: &[u8; 8] = b"WOLF3DSV";
-/// Current on-disk format version. Bumped to 4 for bestweapon / nextextra and
-/// projectile smoke_acc; older saves are refused by [`read_header`].
-pub const VERSION: u16 = 4;
+/// Current on-disk format version. Bumped to 5 for actor temp1 (Angel volley
+/// counter); older saves are refused by [`read_header`].
+pub const VERSION: u16 = 5;
 
 /// Variant tag in the save header: 0 = WL6, 1 = Spear of Destiny.
 pub const VAR_WL6: u8 = 0;

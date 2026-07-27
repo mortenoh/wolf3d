@@ -81,6 +81,24 @@ const ITEM_STEP: i32 = 13;
 const NE_X: i32 = 10;
 const NE_Y: i32 = 23;
 
+// --- Difficulty-select layout (NM_* from WL_MENU.H / DrawNewGame) ---
+const NM_X: i32 = 50;
+const NM_Y: i32 = 100;
+const NM_W: i32 = 225;
+const NM_H: i32 = 13 * 4 + 15;
+const NM_INDENT: i32 = 24;
+/// C_MOUSELBACKPIC placement under the skill window.
+const NM_MOUSE_X: i32 = 112;
+const NM_MOUSE_Y: i32 = 184;
+/// Skill face: DrawNewGameDiff at (NM_X+185, NM_Y+7).
+const NM_FACE_X: i32 = NM_X + 185;
+const NM_FACE_Y: i32 = NM_Y + 7;
+
+// HandleMenu gun blink: C_CURSOR1 for 70 tics, C_CURSOR2 twitch for 8 tics.
+const GUN_REST_TICS: f32 = 70.0;
+const GUN_TWITCH_TICS: f32 = 8.0;
+const GUN_CYCLE_TICS: f32 = GUN_REST_TICS + GUN_TWITCH_TICS;
+
 // --- Sound-menu layout (SM_* from WL_MENU.H) ---
 const SM_X: i32 = 48;
 const SM_W: i32 = 250;
@@ -217,6 +235,10 @@ pub struct Menu {
     cursor: [Picture; 2],
     episodes: Vec<Picture>,
     difficulty: Vec<Picture>,
+    /// C_MOUSELBACKPIC under the difficulty window.
+    mouse_lback: Picture,
+    /// SOD C_HOWTOUGHPIC banner; `None` on WL6 (text title instead).
+    how_tough: Option<Picture>,
     /// Radio-button art: [not-selected, selected] (Sound menu).
     radio: [Picture; 2],
     /// Sound-menu section titles: [effects, music].
@@ -230,8 +252,10 @@ pub struct Menu {
     backdrop: Option<Picture>,
     /// The variant's window colors (red on WL6, blue on Spear).
     colors: Colors,
-    /// Cursor animation clock, in seconds.
-    blink: f32,
+    /// Gun-cursor blink clock in tics (HandleMenu: 70 rest + 8 twitch).
+    gun_blink: f32,
+    /// Attract "DEMO" label pulse clock in seconds (slow grey toggle).
+    demo_blink: f32,
 }
 
 impl Menu {
@@ -262,25 +286,35 @@ impl Menu {
             difficulty: (0..NUM_DIFFICULTIES)
                 .map(|d| vga.pic(gfx.baby_mode + d))
                 .collect(),
+            mouse_lback: vga.pic(gfx.mouse_lback),
+            how_tough: gfx.how_tough.map(|c| vga.pic(c)),
             radio: [vga.pic(gfx.not_selected), vga.pic(gfx.selected)],
             sound_titles: [vga.pic(gfx.fx_title), vga.pic(gfx.music_title)],
             ls_titles: [vga.pic(gfx.load_game), vga.pic(gfx.save_game)],
             credits: vga.pic(gfx.credits),
             backdrop: gfx.backdrop.map(|c| vga.pic(c)),
             colors: Colors::for_variant(variant.is_sod()),
-            blink: 0.0,
+            gun_blink: 0.0,
+            demo_blink: 0.0,
         }
     }
 
-    /// Advance the cursor blink clock (call once per frame from any menu).
+    /// Advance the gun twitch and DEMO pulse clocks (call once per frame from
+    /// any menu). Gun timing is in 70 Hz tics so it matches HandleMenu.
     pub fn tick(&mut self, dt: f32) {
-        self.blink = (self.blink + dt) % 1.0;
+        self.gun_blink = (self.gun_blink + dt * 70.0) % GUN_CYCLE_TICS;
+        self.demo_blink = (self.demo_blink + dt) % 1.0;
     }
 
-    /// The current gun-cursor frame: the original alternates C_CURSOR1PIC and
-    /// C_CURSOR2PIC (the gun "twitches") on a short cycle.
+    /// The current gun-cursor frame: C_CURSOR1 for 70 tics, C_CURSOR2 for 8
+    /// (HandleMenu shape/timer swap).
     fn cursor_frame(&self) -> &Picture {
-        &self.cursor[if self.blink < 0.5 { 0 } else { 1 }]
+        &self.cursor[if self.gun_blink < GUN_REST_TICS { 0 } else { 1 }]
+    }
+
+    /// True while the gun is on the brief C_CURSOR2 twitch frame (for tests).
+    pub fn gun_is_twitching(&self) -> bool {
+        self.gun_blink >= GUN_REST_TICS
     }
 
     /// DrawGun (WL_MENU.C): place the gun cursor at (`x`, `y`).
@@ -318,10 +352,10 @@ impl Menu {
     }
 
     /// The flashing "DEMO" tag drawn in a corner during attract playback
-    /// (WL_PLAY.C PlayDemo shows "DEMO" over the recorded run). `blink` drives a
-    /// slow pulse between the two grey shades.
+    /// (WL_PLAY.C PlayDemo shows "DEMO" over the recorded run). A slow ~1 Hz
+    /// pulse toggles between the two grey shades.
     pub fn draw_demo_label(&self, fb: &mut Framebuffer) {
-        let color = if self.blink < 0.5 {
+        let color = if self.demo_blink < 0.5 {
             HIGHLIGHT
         } else {
             TEXTCOLOR
@@ -391,29 +425,39 @@ impl Menu {
         self.draw_gun(fb, NE_X, cy);
     }
 
-    /// Difficulty select: the "How tough are you?" prompt over the selected
-    /// skill's BJ banner (the original cycles one banner at a time, its face
-    /// hardening with the skill).
+    /// Difficulty select (WL_MENU.C DrawNewGame / DrawNewGameDiff): skill list
+    /// in an `NM_*` window, gun on `selected`, skill face at (NM_X+185, NM_Y+7),
+    /// looking-up BJ under the window. SOD draws C_HOWTOUGHPIC for the title.
     pub fn render_difficulty(&self, fb: &mut Framebuffer, selected: usize) {
         self.clear_mscreen(fb);
-        self.draw_stripes(fb, 10);
-        self.font
-            .draw_centered(fb, 68, "How tough are you?", HIGHLIGHT);
+        blit(fb, &self.mouse_lback, NM_MOUSE_X, NM_MOUSE_Y);
 
-        let pic = &self.difficulty[selected];
-        let x = (WIDTH as i32 - pic.width as i32) / 2;
-        blit(fb, pic, x, 90);
+        // Title: text on WL6, C_HOWTOUGHPIC on Spear (PrintX/Y = NM_X+20, NM_Y-32).
+        let title_x = NM_X + 20;
+        let title_y = NM_Y - 32;
+        if let Some(pic) = &self.how_tough {
+            blit(fb, pic, title_x, title_y);
+        } else {
+            self.font
+                .draw(fb, title_x, title_y, "How tough are you?", HIGHLIGHT);
+        }
 
-        // The skill phrase under the mugshot, then a navigation hint.
-        let phrase_y = 90 + pic.height as i32 + 6;
-        self.font
-            .draw_centered(fb, phrase_y, DIFFICULTY_NAMES[selected], HIGHLIGHT);
-        self.font.draw_centered(
-            fb,
-            phrase_y + self.font.height() as i32 + 8,
-            "Up / Down to choose, Enter to start",
-            TEXTCOLOR,
-        );
+        self.draw_window(fb, NM_X - 5, NM_Y - 10, NM_W, NM_H, self.colors.bkgd);
+
+        for (i, name) in DIFFICULTY_NAMES.iter().enumerate() {
+            let color = if i == selected { HIGHLIGHT } else { TEXTCOLOR };
+            let y = NM_Y + i as i32 * ITEM_STEP;
+            self.font.draw(fb, NM_X + NM_INDENT, y, name, color);
+        }
+
+        // DrawGun: x = NM_X & ~7, y = (NM_Y - 2) + which*13.
+        let cx = NM_X & !7;
+        let cy = NM_Y - 2 + selected as i32 * ITEM_STEP;
+        self.draw_gun(fb, cx, cy);
+
+        // DrawNewGameDiff: skill face to the right of the list.
+        let pic = &self.difficulty[selected.min(NUM_DIFFICULTIES - 1)];
+        blit(fb, pic, NM_FACE_X, NM_FACE_Y);
     }
 
     /// The Sound options screen (WL_MENU.C CP_Sound shape, modern labels).
@@ -566,21 +610,26 @@ impl Menu {
             .draw_centered(fb, GRID_Y + 11 * ROW_H + 4, name, HIGHLIGHT);
     }
 
-    /// Change View (WL_MENU.C CP_ChangeView): a caption band drawn over the live
-    /// 3D-view preview (the world is already rendered at the chosen size). Shows
-    /// the size step and the arrow controls.
+    /// Change View (WL_MENU.C `DrawChangeView`): the live 3D preview is already
+    /// in the framebuffer; repaint the status-bar strip and print the original
+    /// sizing instructions there (`STR_SIZE1`/`2`/`3`).
     pub fn render_change_view(&self, fb: &mut Framebuffer, view_w: usize) {
-        bar(fb, 0, 0, WIDTH as i32, 22, 0);
-        hlin(fb, 0, WIDTH as i32 - 1, 22, self.colors.stripe);
-        self.font
-            .draw_centered(fb, 2, "Change View - Left / Right to size", HIGHLIGHT);
-        let size = view_w / 16; // 4..=20 (original's ChangeView units)
-        self.font.draw_centered(
-            fb,
-            2 + self.font.height() as i32,
-            &format!("< {size} >   (Enter / Esc accepts)"),
-            TEXTCOLOR,
-        );
+        // VWB_Bar(0,160,320,40,VIEWCOLOR) — teal strip where the HUD normally is.
+        const VIEWCOLOR: u8 = 127;
+        bar(fb, 0, 160, WIDTH as i32, 40, VIEWCOLOR);
+        // STR_SIZE1 / STR_SIZE2 / STR_SIZE3 (FOREIGN.H), PrintY = 161.
+        let size = view_w / 16; // original units 4..=20
+        let lines = [
+            format!("Use arrows to size  < {size} >"),
+            "ENTER to accept".to_string(),
+            "ESC to cancel".to_string(),
+        ];
+        let fh = self.font.height() as i32;
+        let mut y = 161;
+        for line in &lines {
+            self.font.draw_centered(fb, y, line, HIGHLIGHT);
+            y += fh + 1;
+        }
     }
 
     /// Control (WL_MENU.C CP_Control, simplified): a mouse-sensitivity slider
