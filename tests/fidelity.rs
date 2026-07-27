@@ -1,7 +1,8 @@
 //! Fidelity checks for original-game behavior: score extralives
 //! (GivePoints / EXTRAPOINTS), bestweapon tracking, per-floor ceiling colours,
 //! SOD spectre rematerialisation (A_Dormant), the death FizzleFade, BJ face
-//! glances (UpdateFace), area connectivity (`areabyplayer`), and CheckLine.
+//! glances (UpdateFace), area connectivity (`areabyplayer`), CheckLine, and
+//! 2-rotation pain frames.
 
 use wolf3d::actors::{self, Kind};
 use wolf3d::assets::{MapSet, data_dir};
@@ -449,6 +450,78 @@ fn same_area_stays_connected_through_closed_door() {
     assert!(
         game.world.in_player_area(33, 57),
         "same-area tiles remain in areabyplayer with the door shut"
+    );
+}
+
+/// Pain frames use rotate==2: CalcRotate returns 0 or 4 so SPR_*_PAIN_1 and
+/// SPR_*_PAIN_2 (four slots apart in VSWAP) flip with the view angle.
+#[test]
+fn pain_frames_use_two_rotations() {
+    let mut game = Game::new(0);
+    game.god = true;
+    // Knife does small damage so a full-health guard survives the first hit.
+    game.weapon = WEAPON_KNIFE;
+    game.bestweapon = WEAPON_KNIFE;
+
+    let guard_idx = game
+        .actors
+        .list
+        .iter()
+        .position(|a| !a.dead && a.kind == Kind::Guard)
+        .expect("E1M1 should have a guard");
+    let (gx, gy) = (game.actors.list[guard_idx].x, game.actors.list[guard_idx].y);
+
+    game.player.x = gx - 0.3;
+    game.player.y = gy;
+    game.player.angle = 0.0;
+    let h0 = game.actors.list[guard_idx].health();
+    let mut in_pain = false;
+    for _ in 0..40 {
+        game.update(
+            DT,
+            &Input {
+                fire: true,
+                ..Default::default()
+            },
+        );
+        if game.actors.list[guard_idx].dead {
+            break;
+        }
+        if game.actors.list[guard_idx].health() < h0 {
+            in_pain = true;
+            break;
+        }
+    }
+    assert!(
+        in_pain,
+        "knife hit should put a living guard into a pain frame"
+    );
+    assert!(!game.actors.list[guard_idx].dead);
+    assert!(
+        game.actors.list[guard_idx].health() < h0,
+        "guard health should have dropped"
+    );
+
+    let (ax, ay) = (game.actors.list[guard_idx].x, game.actors.list[guard_idx].y);
+    // View from opposite compass sides; 2-rotation art differs by 4 sprite slots.
+    let views = [
+        game.actors.sprite_of(guard_idx, ax + 2.0, ay),
+        game.actors.sprite_of(guard_idx, ax - 2.0, ay),
+        game.actors.sprite_of(guard_idx, ax, ay - 2.0),
+        game.actors.sprite_of(guard_idx, ax, ay + 2.0),
+    ];
+    let distinct: std::collections::BTreeSet<_> = views.iter().copied().collect();
+    assert!(
+        distinct.len() >= 2,
+        "pain frame should flip between two sprites with view angle, got {views:?}"
+    );
+    // The two pain pics are four VSWAP slots apart (PAIN_1 + 4 == PAIN_2).
+    let mut sorted: Vec<_> = distinct.into_iter().collect();
+    sorted.sort_unstable();
+    assert_eq!(
+        sorted[1] - sorted[0],
+        4,
+        "2-rotation pain sprites are 4 indices apart, got {sorted:?}"
     );
 }
 

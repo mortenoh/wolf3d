@@ -9,8 +9,6 @@
 //! whole simulation stays frame-rate independent and reproduces headlessly.
 //!
 //! Deliberate simplifications vs. the original:
-//! - Pain frames render single-view (the original's "2 rotation" pain art is
-//!   collapsed to one frame).
 //! - Actors are not blocked by blocking static objects (tables etc.), matching
 //!   an original quirk where such statics are not `FL_SHOOTABLE` and so pass the
 //!   `TryWalk` actor test.
@@ -186,12 +184,20 @@ enum Action {
     Dormant,
 }
 
+/// Rotation mode for a state (WL_ACT2.C `statetype.rotate`).
+const ROT_NONE: u8 = 0;
+/// Full 8-view walk/stand art: add CalcRotate 0..=7 to the base sprite.
+const ROT_8: u8 = 1;
+/// 2-view pain art: add 0 or 4 (sprites are 4 indices apart in VSWAP).
+const ROT_2: u8 = 2;
+
 /// A single actor state — a direct analogue of the original `statetype`.
 struct State {
-    /// Base VSWAP sprite; for `rotate` states this is the "_1" (front) frame of
-    /// an 8-view group and the view offset is added at draw time.
+    /// Base VSWAP sprite; for rotating states this is the "_1" (front) frame
+    /// and the view offset is added at draw time.
     sprite: u16,
-    rotate: bool,
+    /// 0 = single view, 1 = 8-view, 2 = 2-view pain (WL_DRAW.C CalcRotate).
+    rotate: u8,
     /// Duration in tics; 0 means a permanent state (stand / dead).
     tics: u16,
     think: Think,
@@ -431,7 +437,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         // stand (b+0)
         v.push(State {
             sprite: stand,
-            rotate: true,
+            rotate: ROT_8,
             tics: 0,
             think: Think::Stand,
             action: Action::None,
@@ -440,7 +446,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         // path1..path4 (b+1..=b+6)
         v.push(State {
             sprite: w1,
-            rotate: true,
+            rotate: ROT_8,
             tics: 20,
             think: Think::Path,
             action: Action::None,
@@ -448,7 +454,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w1,
-            rotate: true,
+            rotate: ROT_8,
             tics: 5,
             think: Think::None,
             action: Action::None,
@@ -456,7 +462,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w2,
-            rotate: true,
+            rotate: ROT_8,
             tics: 15,
             think: Think::Path,
             action: Action::None,
@@ -464,7 +470,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w3,
-            rotate: true,
+            rotate: ROT_8,
             tics: 20,
             think: Think::Path,
             action: Action::None,
@@ -472,7 +478,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w3,
-            rotate: true,
+            rotate: ROT_8,
             tics: 5,
             think: Think::None,
             action: Action::None,
@@ -480,16 +486,17 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w4,
-            rotate: true,
+            rotate: ROT_8,
             tics: 15,
             think: Think::Path,
             action: Action::None,
             next: b + 1,
         });
-        // pain (b+7), pain1 (b+8)
+        // pain (b+7), pain1 (b+8) — rotate==2: CalcRotate returns 0 or 4 so
+        // SPR_*_PAIN_1 / +4 (PAIN_2) flip with the view (WL_DRAW.C).
         v.push(State {
             sprite: pain1,
-            rotate: false,
+            rotate: ROT_2,
             tics: 10,
             think: Think::None,
             action: Action::None,
@@ -497,7 +504,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: pain2,
-            rotate: false,
+            rotate: ROT_2,
             tics: 10,
             think: Think::None,
             action: Action::None,
@@ -508,7 +515,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             let next = if k + 1 < s { b + 9 + k + 1 } else { chase0 };
             v.push(State {
                 sprite: spr,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics,
                 think: Think::None,
                 action: if fire { Action::Shoot } else { Action::None },
@@ -518,7 +525,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         // chase (chase0 ..)
         v.push(State {
             sprite: w1,
-            rotate: true,
+            rotate: ROT_8,
             tics: 10,
             think: Think::Chase,
             action: Action::None,
@@ -526,7 +533,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w1,
-            rotate: true,
+            rotate: ROT_8,
             tics: 3,
             think: Think::None,
             action: Action::None,
@@ -534,7 +541,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w2,
-            rotate: true,
+            rotate: ROT_8,
             tics: 8,
             think: Think::Chase,
             action: Action::None,
@@ -542,7 +549,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w3,
-            rotate: true,
+            rotate: ROT_8,
             tics: 10,
             think: Think::Chase,
             action: Action::None,
@@ -550,7 +557,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w3,
-            rotate: true,
+            rotate: ROT_8,
             tics: 3,
             think: Think::None,
             action: Action::None,
@@ -558,7 +565,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w4,
-            rotate: true,
+            rotate: ROT_8,
             tics: 8,
             think: Think::Chase,
             action: Action::None,
@@ -570,7 +577,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             let next = if k + 1 < d { die0 + k + 1 } else { die0 + k };
             v.push(State {
                 sprite: spr,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics,
                 think: Think::None,
                 action: if k == 0 {
@@ -672,7 +679,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         // original; a dog stand marker just yields a dog that notices and chases.
         v.push(State {
             sprite: w1,
-            rotate: true,
+            rotate: ROT_8,
             tics: 0,
             think: Think::Stand,
             action: Action::None,
@@ -681,7 +688,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         // path1..path4 (b+1..=b+6)
         v.push(State {
             sprite: w1,
-            rotate: true,
+            rotate: ROT_8,
             tics: 20,
             think: Think::Path,
             action: Action::None,
@@ -689,7 +696,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w1,
-            rotate: true,
+            rotate: ROT_8,
             tics: 5,
             think: Think::None,
             action: Action::None,
@@ -697,7 +704,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w2,
-            rotate: true,
+            rotate: ROT_8,
             tics: 15,
             think: Think::Path,
             action: Action::None,
@@ -705,7 +712,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w3,
-            rotate: true,
+            rotate: ROT_8,
             tics: 20,
             think: Think::Path,
             action: Action::None,
@@ -713,7 +720,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w3,
-            rotate: true,
+            rotate: ROT_8,
             tics: 5,
             think: Think::None,
             action: Action::None,
@@ -721,7 +728,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w4,
-            rotate: true,
+            rotate: ROT_8,
             tics: 15,
             think: Think::Path,
             action: Action::None,
@@ -731,7 +738,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         let chase0 = b + 12;
         v.push(State {
             sprite: 135 + f,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: 10,
             think: Think::None,
             action: Action::None,
@@ -739,7 +746,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: 136 + f,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: 10,
             think: Think::None,
             action: Action::Bite,
@@ -747,7 +754,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: 137 + f,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: 10,
             think: Think::None,
             action: Action::None,
@@ -755,7 +762,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: 135 + f,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: 10,
             think: Think::None,
             action: Action::None,
@@ -763,7 +770,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w1,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: 10,
             think: Think::None,
             action: Action::None,
@@ -772,7 +779,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         // chase1..chase4 (chase0..)
         v.push(State {
             sprite: w1,
-            rotate: true,
+            rotate: ROT_8,
             tics: 10,
             think: Think::DogChase,
             action: Action::None,
@@ -780,7 +787,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w1,
-            rotate: true,
+            rotate: ROT_8,
             tics: 3,
             think: Think::None,
             action: Action::None,
@@ -788,7 +795,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w2,
-            rotate: true,
+            rotate: ROT_8,
             tics: 8,
             think: Think::DogChase,
             action: Action::None,
@@ -796,7 +803,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w3,
-            rotate: true,
+            rotate: ROT_8,
             tics: 10,
             think: Think::DogChase,
             action: Action::None,
@@ -804,7 +811,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w3,
-            rotate: true,
+            rotate: ROT_8,
             tics: 3,
             think: Think::None,
             action: Action::None,
@@ -812,7 +819,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w4,
-            rotate: true,
+            rotate: ROT_8,
             tics: 8,
             think: Think::DogChase,
             action: Action::None,
@@ -822,7 +829,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         let die0 = chase0 + 6;
         v.push(State {
             sprite: 131 + f,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: 15,
             think: Think::None,
             action: Action::DeathScream,
@@ -830,7 +837,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: 132 + f,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: 15,
             think: Think::None,
             action: Action::None,
@@ -838,7 +845,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: 133 + f,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: 15,
             think: Think::None,
             action: Action::None,
@@ -846,7 +853,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: 134 + f,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: 15,
             think: Think::None,
             action: Action::None,
@@ -881,7 +888,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         if stand {
             v.push(State {
                 sprite: w1,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics: 0,
                 think: Think::Stand,
                 action: Action::None,
@@ -892,7 +899,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         let (t1, ts, t2) = chase_tics;
         v.push(State {
             sprite: w1,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: t1,
             think: chase_think,
             action: Action::None,
@@ -900,7 +907,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w1,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: ts,
             think: Think::None,
             action: Action::None,
@@ -908,7 +915,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w2,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: t2,
             think: chase_think,
             action: Action::None,
@@ -916,7 +923,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w3,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: t1,
             think: chase_think,
             action: Action::None,
@@ -924,7 +931,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w3,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: ts,
             think: Think::None,
             action: Action::None,
@@ -932,7 +939,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w4,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: t2,
             think: chase_think,
             action: Action::None,
@@ -945,7 +952,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             let next = if k + 1 < s { shoot0 + k + 1 } else { chase0 };
             v.push(State {
                 sprite: spr,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics,
                 think: Think::None,
                 action,
@@ -959,7 +966,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             let next = if k + 1 < d { die0 + k + 1 } else { die0 + k };
             v.push(State {
                 sprite: spr,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics,
                 think: Think::None,
                 action,
@@ -986,7 +993,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         let b = v.len();
         v.push(State {
             sprite: 0,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: 0,
             think: Think::None,
             action: A::None,
@@ -1010,7 +1017,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         let b = v.len();
         v.push(State {
             sprite: w1,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: 10,
             think: Think::GhostChase,
             action: A::None,
@@ -1018,7 +1025,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
         });
         v.push(State {
             sprite: w1 + 1,
-            rotate: false,
+            rotate: ROT_NONE,
             tics: 10,
             think: Think::GhostChase,
             action: A::None,
@@ -1389,7 +1396,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             // that SightPlayer can wake, then chase).
             v.push(State {
                 sprite: 343,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics: 0,
                 think: Think::Stand,
                 action: A::None,
@@ -1397,7 +1404,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             });
             v.push(State {
                 sprite: 343,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics: 10,
                 think: Think::GhostChase,
                 action: A::None,
@@ -1405,7 +1412,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             });
             v.push(State {
                 sprite: 344,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics: 10,
                 think: Think::GhostChase,
                 action: A::None,
@@ -1413,7 +1420,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             });
             v.push(State {
                 sprite: 345,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics: 10,
                 think: Think::GhostChase,
                 action: A::None,
@@ -1421,7 +1428,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             });
             v.push(State {
                 sprite: 346,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics: 10,
                 think: Think::GhostChase,
                 action: A::None,
@@ -1431,7 +1438,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             // s_spectredie1..3
             v.push(State {
                 sprite: 347,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics: 10,
                 think: Think::None,
                 action: A::DeathScream,
@@ -1439,7 +1446,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             });
             v.push(State {
                 sprite: 348,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics: 10,
                 think: Think::None,
                 action: A::None,
@@ -1447,7 +1454,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             });
             v.push(State {
                 sprite: 349,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics: 10,
                 think: Think::None,
                 action: A::None,
@@ -1456,7 +1463,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             // s_spectredie4: 300 tics of F4, then wake.
             v.push(State {
                 sprite: 350,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics: 300,
                 think: Think::None,
                 action: A::None,
@@ -1465,7 +1472,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
             // s_spectrewake: A_Dormant every 10 tics until the tile is clear.
             v.push(State {
                 sprite: 350,
-                rotate: false,
+                rotate: ROT_NONE,
                 tics: 10,
                 think: Think::None,
                 action: A::Dormant,
@@ -3216,16 +3223,24 @@ impl Actors {
     }
 
     /// Current sprite for actor `idx`, seen from the given viewer position.
-    /// Rotating states add the 8-view offset (the original's CalcRotate).
+    /// Rotating states add the CalcRotate offset (8-view or 2-view pain).
     pub fn sprite_of(&mut self, idx: usize, viewer_x: f32, viewer_y: f32) -> usize {
         self.list[idx].visible = true;
         let a = &self.list[idx];
         let st = &self.table.states[a.state];
-        if !st.rotate {
-            return st.sprite as usize;
+        match st.rotate {
+            ROT_NONE => st.sprite as usize,
+            ROT_8 => {
+                let rot = rotation_view(a.dir, a.x, a.y, viewer_x, viewer_y);
+                st.sprite as usize + rot
+            }
+            // 2 rotation pain frame: 4*(angle/(ANGLES/2)) — 0 or 4.
+            ROT_2 => {
+                let rot8 = rotation_view(a.dir, a.x, a.y, viewer_x, viewer_y);
+                st.sprite as usize + if rot8 < 4 { 0 } else { 4 }
+            }
+            _ => st.sprite as usize,
         }
-        let rot = rotation_view(a.dir, a.x, a.y, viewer_x, viewer_y);
-        st.sprite as usize + rot
     }
 }
 
