@@ -65,13 +65,13 @@ pub struct Input {
 }
 
 /// Sound-effect playback mode, the Sound menu's effects radio group. The
-/// original had separate None/PC-Speaker/AdLib and None/SoundBlaster groups;
-/// we collapse them into one three-way choice the frontend honors.
+/// original DOS menu split PC-Speaker / AdLib / Sound Blaster; here it is one
+/// three-way choice with modern labels (Digital / Synthesized / Off).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SfxMode {
-    /// Prefer digitized samples, fall back to AdLib (the default, full sound).
+    /// Prefer digitized samples, fall back to OPL synthesis (default, full sound).
     DigiAdlib,
-    /// AdLib synthesis only — never the digitized samples.
+    /// OPL synthesis only — never the digitized samples.
     AdlibOnly,
     /// No sound effects at all.
     Off,
@@ -123,6 +123,9 @@ pub enum GameScreen {
     /// The Quit confirmation prompt (WL_MENU.C `CP_Quit`): a random taunt from
     /// `END_STRINGS` over the main menu, waiting on Y / N / Esc.
     QuitConfirm,
+    /// Confirm ending the current game (WL_MENU.C `CP_EndGame`): "End the
+    /// current game?" over the main menu, waiting on Y / N / Esc.
+    EndGameConfirm,
     /// The level-select cheat screen (the 6 key during play): a 6x10
     /// episode/floor grid; Enter warps, keeping the current stats.
     LevelSelect,
@@ -702,6 +705,7 @@ impl Game {
             GameScreen::HighScoreEntry => self.update_high_score_entry(input),
             GameScreen::ReadThis => self.update_read_this(input),
             GameScreen::QuitConfirm => self.update_quit_confirm(input),
+            GameScreen::EndGameConfirm => self.update_endgame_confirm(input),
             GameScreen::LevelSelect => self.update_level_select(input),
             GameScreen::ChangeView => self.update_change_view(input),
             GameScreen::Control => self.update_control(input),
@@ -1250,9 +1254,17 @@ impl Game {
     }
 
     /// Whether main-menu item `i` is selectable. Save Game is only available
-    /// once a game is in progress (WL_MENU.C greys it outside of play).
+    /// once a game is in progress; Read This! only when the variant ships help
+    /// art (WL6). End Game / Back to Game stay selectable while started.
     pub fn main_item_active(&self, i: usize) -> bool {
-        MAIN_ITEMS[i].active && (i != menu::ITEM_SAVE || self.started)
+        if !MAIN_ITEMS[i].active {
+            return false;
+        }
+        match i {
+            menu::ITEM_SAVE => self.started,
+            menu::ITEM_READ => self.variant.gfx.help_art.is_some(),
+            _ => true,
+        }
     }
 
     /// Move the cursor to the next selectable item in `dir` (+1 / -1), skipping
@@ -1328,19 +1340,30 @@ impl Game {
                     self.screen = GameScreen::SaveGame;
                 }
                 menu::ITEM_READ => {
-                    // SOD has no "Read This!" help article; ignore the item there.
+                    // SOD has no "Read This!" help article; the item is greyed.
                     if let Some(help) = self.variant.gfx.help_art {
                         self.readthis = Some(TextScreen::new(&self.vga, help));
                         self.readthis_page = 0;
                         self.screen = GameScreen::ReadThis;
                     }
                 }
+                menu::ITEM_VIEWSCORES if self.started => {
+                    // In-game the slot is "End Game" (WL_MENU.C EnableEndGameMenuItem).
+                    self.screen = GameScreen::EndGameConfirm;
+                }
                 menu::ITEM_VIEWSCORES => {
                     self.hs_return = HsReturn::Menu;
                     self.hs_edit_slot = None;
                     self.screen = GameScreen::HighScores;
                 }
-                menu::ITEM_BACKTODEMO => self.to_title(),
+                menu::ITEM_BACKTODEMO if self.started => {
+                    // "Back to Game" — resume play (WL_MENU.C backtodemo + ingame).
+                    self.screen = GameScreen::Playing;
+                }
+                menu::ITEM_BACKTODEMO => {
+                    // "Back to Demo" — return to the title / attract loop.
+                    self.to_title();
+                }
                 menu::ITEM_QUIT => {
                     // CP_Quit: endStrings[(US_RndT()&7) + (US_RndT()&1)], which
                     // spans all nine taunts.
@@ -1359,6 +1382,16 @@ impl Game {
     fn update_quit_confirm(&mut self, input: &Input) {
         if input.menu_enter {
             self.should_quit = true;
+        } else if input.menu_back {
+            self.screen = GameScreen::MainMenu;
+        }
+    }
+
+    /// CP_EndGame's Y/N wait: end the run and return to the title / attract loop.
+    fn update_endgame_confirm(&mut self, input: &Input) {
+        if input.menu_enter {
+            self.victory = false;
+            self.to_title();
         } else if input.menu_back {
             self.screen = GameScreen::MainMenu;
         }
@@ -1558,7 +1591,10 @@ impl Game {
     /// Whether a yes/no prompt is up, so the frontend routes Y/N/Esc to it and
     /// swallows every other shortcut (CP_Quit's wait loop accepts nothing else).
     pub fn is_confirm(&self) -> bool {
-        self.screen == GameScreen::QuitConfirm
+        matches!(
+            self.screen,
+            GameScreen::QuitConfirm | GameScreen::EndGameConfirm
+        )
     }
 
     // --- Save-game serialization (see src/savegame.rs) ---------------------
@@ -2182,14 +2218,34 @@ impl Game {
                 return;
             }
             GameScreen::MainMenu => {
-                self.menu.render_main(fb, self.main_sel, self.started);
+                self.menu.render_main(
+                    fb,
+                    self.main_sel,
+                    self.started,
+                    self.variant.gfx.help_art.is_some(),
+                );
                 return;
             }
             // CP_Quit draws its Message over the still-visible main menu.
             GameScreen::QuitConfirm => {
-                self.menu.render_main(fb, self.main_sel, self.started);
+                self.menu.render_main(
+                    fb,
+                    self.main_sel,
+                    self.started,
+                    self.variant.gfx.help_art.is_some(),
+                );
                 self.menu
                     .render_message(fb, menu::END_STRINGS[self.quit_msg]);
+                return;
+            }
+            GameScreen::EndGameConfirm => {
+                self.menu.render_main(
+                    fb,
+                    self.main_sel,
+                    self.started,
+                    self.variant.gfx.help_art.is_some(),
+                );
+                self.menu.render_message(fb, "End the current game?");
                 return;
             }
             GameScreen::Episode => {

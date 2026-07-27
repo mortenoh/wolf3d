@@ -6,53 +6,46 @@
 //!
 //! ## Caret commands
 //!
-//! Inspecting the real WL6 `T_ENDART*` / `T_HELPART` chunk bytes, the articles
-//! use this subset (case-insensitive after `^`, per `toupper` in the original):
-//!
-//! - `^P` — page break. The rest of the line is skipped (help pages tag them
-//!   `^PAGE 3`; the trailing `AGE 3` is a comment the original also skips).
+//! - `^P` — page break (rest of line skipped).
 //! - `^E` — end of the article.
 //! - `^Cnn` — set the font color to the two-hex-digit palette byte `nn`.
-//! - `^Gy,x,pic` — draw picture chunk `pic` at pixel `(x & ~7, y)` and reserve a
-//!   text margin beside it, exactly like `VWB_DrawPic` + the margin loop.
+//! - `^Gy,x,pic` — draw picture chunk `pic` at pixel `(x & ~7, y)` and reserve
+//!   per-row text margins beside it.
 //!
-//! Text otherwise flows word-by-word with the small proportional font, wrapping
-//! at the right margin and honoring literal newlines and tabs.
+//! Layout stops at TEXTROWS so body text never paints over the bottom info bar.
+//! Tabs advance to the next 8-pixel boundary (`(px + 8) & !7`), matching WL_TEXT.C.
 
 use crate::assets::VgaGraph;
 use crate::assets::vgagraph::Picture;
 use crate::fb::{Framebuffer, HEIGHT, WIDTH};
 use crate::font::Font;
 
-/// WL_TEXT.C layout constants.
 const BACKCOLOR: u8 = 0x11;
 const LEFTMARGIN: i32 = 16;
 const RIGHTMARGIN: i32 = 16;
 const PICMARGIN: i32 = 8;
 const TOPMARGIN: i32 = 16;
+const BOTTOMMARGIN: i32 = 32;
 const SPACEWIDTH: i32 = 7;
 const SCREENMID: i32 = WIDTH as i32 / 2;
+/// `(200 - TOPMARGIN - BOTTOMMARGIN) / FONTHEIGHT` with the height-10 font.
+const TEXTROWS: usize = ((200 - TOPMARGIN - BOTTOMMARGIN) / 10) as usize;
 
-/// The paper-window frame pics (GFXV_WL6.H): drawn by `PageLayout`.
 const H_TOPWINDOWPIC: usize = 6;
 const H_LEFTWINDOWPIC: usize = 7;
 const H_RIGHTWINDOWPIC: usize = 8;
 const H_BOTTOMINFOPIC: usize = 9;
 
-/// The parsed pages of one article plus the font, ready to render any page.
 pub struct TextScreen {
     font: Font,
     top: Picture,
     left: Picture,
     right: Picture,
     bottom: Picture,
-    /// Each page's raw markup text (between successive `^P` markers, up to `^E`).
     pages: Vec<String>,
 }
 
 impl TextScreen {
-    /// Decode the article chunk `chunk` and split it into pages. The frame pics
-    /// are cached here so a redraw needs only the framebuffer.
     pub fn new(vga: &VgaGraph, chunk: usize) -> Self {
         let raw = vga.raw_chunk(chunk);
         let text = String::from_utf8_lossy(&raw).into_owned();
@@ -70,10 +63,7 @@ impl TextScreen {
         self.pages.len()
     }
 
-    /// Draw page `page` (clamped) over the paper backdrop. `vga` is needed to
-    /// decode any `^G` embedded pictures on demand.
     pub fn render(&self, fb: &mut Framebuffer, vga: &VgaGraph, page: usize) {
-        // PageLayout: paper fill + window frame.
         fill(fb, BACKCOLOR);
         blit(fb, &self.top, 0, 0);
         blit(fb, &self.left, 0, 8);
@@ -85,34 +75,33 @@ impl TextScreen {
             HEIGHT as i32 - self.bottom.height as i32,
         );
 
-        let Some(text) = self.pages.get(page.min(self.pages.len().saturating_sub(1))) else {
-            return;
-        };
-        self.layout(fb, vga, text);
+        let page = page.min(self.pages.len().saturating_sub(1));
+        if let Some(text) = self.pages.get(page) {
+            self.layout(fb, vga, text);
+        }
+
+        let label = format!("pg {} of {}", page + 1, self.pages.len().max(1));
+        self.font.draw(fb, 213, 183, &label, 0x4f);
     }
 
-    /// Walk one page's markup, drawing words and honoring the caret commands.
     fn layout(&self, fb: &mut Framebuffer, vga: &VgaGraph, text: &str) {
         let fh = self.font.height() as i32;
         let mut color = 0u8;
         let mut px = LEFTMARGIN;
+        let mut rowon: usize = 0;
         let mut py = TOPMARGIN;
-        // Per-row left/right margins, widened beside a `^G` picture.
-        let mut left_margin = LEFTMARGIN;
-        let mut right_margin = WIDTH as i32 - RIGHTMARGIN;
-        let mut margin_bottom = 0; // rows above this y keep the widened margins
+        let mut left_margin = [LEFTMARGIN; TEXTROWS];
+        let mut right_margin = [WIDTH as i32 - RIGHTMARGIN; TEXTROWS];
 
         let bytes = text.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
             let c = bytes[i];
             if c == b'^' {
-                // A caret command.
                 let cmd = bytes.get(i + 1).copied().unwrap_or(0).to_ascii_uppercase();
                 match cmd {
-                    b'E' | b'P' => break, // end of page / article
+                    b'E' | b'P' => break,
                     b'C' => {
-                        // Two hex digits -> color byte.
                         let hi = hexval(bytes.get(i + 2).copied().unwrap_or(b'0'));
                         let lo = hexval(bytes.get(i + 3).copied().unwrap_or(b'0'));
                         color = (hi << 4) | lo;
@@ -120,48 +109,42 @@ impl TextScreen {
                         continue;
                     }
                     b'G' => {
-                        // ^Gy,x,pic
                         let (nums, adv) = parse_numbers(&bytes[i + 2..]);
                         if nums.len() == 3 {
                             let (gy, gx, pic) = (nums[0], nums[1] & !7, nums[2] as usize);
                             let picture = vga.pic(pic);
                             blit(fb, &picture, gx, gy);
-                            // Reserve a text margin beside the picture for the
-                            // rows it spans (VWB margin loop): left if the pic
-                            // sits left of center, right otherwise.
-                            let picmid = gx + picture.width as i32 / 2;
+                            let top_row = ((gy - TOPMARGIN) / fh).max(0) as usize;
+                            let bottom_row =
+                                ((gy + picture.height as i32 - TOPMARGIN) / fh).max(0) as usize;
                             let margin = picture.width as i32 + PICMARGIN;
-                            margin_bottom = gy + picture.height as i32;
-                            if picmid > SCREENMID {
-                                right_margin = WIDTH as i32 - margin;
-                            } else {
-                                left_margin = LEFTMARGIN + margin;
-                                if px < left_margin {
-                                    px = left_margin;
+                            let picmid = gx + picture.width as i32 / 2;
+                            for r in top_row..=bottom_row.min(TEXTROWS.saturating_sub(1)) {
+                                if picmid > SCREENMID {
+                                    right_margin[r] = WIDTH as i32 - margin;
+                                } else {
+                                    left_margin[r] = LEFTMARGIN + margin;
                                 }
+                            }
+                            if px < left_margin[rowon.min(TEXTROWS - 1)] {
+                                px = left_margin[rowon.min(TEXTROWS - 1)];
                             }
                         }
                         i += 2 + adv;
                         continue;
                     }
                     _ => {
-                        // Unknown command: skip the caret and its letter.
                         i += 2;
                         continue;
                     }
                 }
             }
 
-            // Drop the widened margins once we've flowed past the picture.
-            if py >= margin_bottom {
-                left_margin = LEFTMARGIN;
-                right_margin = WIDTH as i32 - RIGHTMARGIN;
-            }
-
             match c {
                 b'\n' => {
-                    px = left_margin;
-                    py += fh;
+                    if !newline(&mut rowon, &mut px, &mut py, fh, &left_margin) {
+                        return;
+                    }
                     i += 1;
                 }
                 b'\r' => i += 1,
@@ -170,52 +153,64 @@ impl TextScreen {
                     i += 1;
                 }
                 b'\t' => {
-                    // Advance to the next 64-pixel tab column (the help TOC uses
-                    // tabs to line its dotted leaders into columns).
-                    px = ((px - left_margin) / 64 + 1) * 64 + left_margin;
+                    // WL_TEXT.C: next 8-pixel column, not 64.
+                    px = (px + 8) & !7;
                     i += 1;
                 }
+                _ if c <= 32 => i += 1,
                 _ => {
-                    // Gather the whole word, measure it, wrap if needed, draw it.
                     let start = i;
-                    while i < bytes.len()
-                        && !matches!(bytes[i], b' ' | b'\n' | b'\r' | b'\t' | b'^')
-                    {
+                    while i < bytes.len() && bytes[i] > 32 && bytes[i] != b'^' {
                         i += 1;
                     }
                     let word = &text[start..i];
                     let w = self.font.text_width(word) as i32;
-                    if px + w > right_margin {
-                        px = left_margin;
-                        py += fh;
+                    while px + w > right_margin[rowon.min(TEXTROWS - 1)] {
+                        if !newline(&mut rowon, &mut px, &mut py, fh, &left_margin) {
+                            return;
+                        }
                     }
                     self.font.draw(fb, px, py, word, color);
                     px += w;
+                    while i < bytes.len() && bytes[i] == b' ' {
+                        px += SPACEWIDTH;
+                        i += 1;
+                    }
                 }
             }
         }
     }
 }
 
-/// Split an article into pages. Every page is the text following a `^P` marker
-/// (the rest of the `^P` line is dropped) up to the next `^P` or the closing
-/// `^E`. Text before the first `^P` is ignored (there is none in the articles).
+fn newline(
+    rowon: &mut usize,
+    px: &mut i32,
+    py: &mut i32,
+    fh: i32,
+    left_margin: &[i32; TEXTROWS],
+) -> bool {
+    *rowon += 1;
+    if *rowon >= TEXTROWS {
+        return false;
+    }
+    *px = left_margin[*rowon];
+    *py += fh;
+    true
+}
+
 fn split_pages(text: &str) -> Vec<String> {
     let mut pages = Vec::new();
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        // Find the next ^P.
         if bytes[i] == b'^' && bytes.get(i + 1).map(|b| b.to_ascii_uppercase()) == Some(b'P') {
-            // Skip to end of the ^P line.
             i += 2;
             while i < bytes.len() && bytes[i] != b'\n' {
                 i += 1;
             }
             if i < bytes.len() {
-                i += 1; // consume the newline
+                i += 1;
             }
-            // Collect until the next ^P or ^E.
             let start = i;
             while i < bytes.len() {
                 if bytes[i] == b'^' {
@@ -243,8 +238,6 @@ fn split_pages(text: &str) -> Vec<String> {
     pages
 }
 
-/// Parse a leading `y,x,pic` number list, returning the values and how many
-/// bytes were consumed (up to and including the trailing non-digit run).
 fn parse_numbers(bytes: &[u8]) -> (Vec<i32>, usize) {
     let mut nums = Vec::new();
     let mut i = 0;

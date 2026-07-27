@@ -117,8 +117,8 @@ pub const MAIN_ITEMS: [MenuItem; 10] = [
         label: "Load Game",
         active: true,
     },
-    // Save Game is only reachable from the pause menu during play; the game
-    // state machine greys it via `Game::main_item_active` when not started.
+    // Save Game is only reachable while a game is in progress; the game state
+    // machine greys it via `Game::main_item_active` when not started.
     MenuItem {
         label: "Save Game",
         active: true,
@@ -131,11 +131,12 @@ pub const MAIN_ITEMS: [MenuItem; 10] = [
         label: "Read This!",
         active: true,
     },
+    // Label swaps to "End Game" while playing (WL_MENU.C EnableEndGameMenuItem).
     MenuItem {
         label: "View Scores",
         active: true,
     },
-    // Returns to the title / attract loop (WL_MENU.C "Back to Demo").
+    // Label swaps to "Back to Game" while playing (WL_MENU.C DrawMainMenu).
     MenuItem {
         label: "Back to Demo",
         active: true,
@@ -153,9 +154,21 @@ pub const ITEM_LOAD: usize = 3;
 pub const ITEM_SAVE: usize = 4;
 pub const ITEM_CHANGEVIEW: usize = 5;
 pub const ITEM_READ: usize = 6;
+/// View Scores when idle; End Game while a game is in progress.
 pub const ITEM_VIEWSCORES: usize = 7;
+/// Back to Demo when idle; Back to Game while a game is in progress.
 pub const ITEM_BACKTODEMO: usize = 8;
 pub const ITEM_QUIT: usize = 9;
+
+/// Dynamic main-menu label for item `i` given whether a game is in progress
+/// (WL_MENU.C DrawMainMenu / EnableEndGameMenuItem).
+pub fn main_item_label(i: usize, started: bool) -> &'static str {
+    match i {
+        ITEM_VIEWSCORES if started => "End Game",
+        ITEM_BACKTODEMO if started => "Back to Game",
+        i => MAIN_ITEMS[i].label,
+    }
+}
 
 pub const NUM_EPISODES: usize = 6;
 pub const NUM_DIFFICULTIES: usize = 4;
@@ -302,15 +315,25 @@ impl Menu {
 
     /// The main menu: the cleared backdrop, Options header, the item window and
     /// the grey/greyed item list with the gun cursor on `selected`.
-    pub fn render_main(&self, fb: &mut Framebuffer, selected: usize, started: bool) {
+    ///
+    /// `started` is true while a game is in progress (Esc from play). That swaps
+    /// "View Scores" → "End Game" and "Back to Demo" → "Back to Game", and enables
+    /// Save. `has_read_this` is false for Spear of Destiny (no help article).
+    pub fn render_main(
+        &self,
+        fb: &mut Framebuffer,
+        selected: usize,
+        started: bool,
+        has_read_this: bool,
+    ) {
         self.clear_mscreen(fb);
         self.draw_stripes(fb, 10);
         blit(fb, &self.options, 84, 0);
         self.draw_window(fb, MENU_X - 8, MENU_Y - 3, MENU_W, MENU_H, self.colors.bkgd);
 
         for (i, item) in MAIN_ITEMS.iter().enumerate() {
-            // Save Game greys out until a game is in progress.
-            let active = item.active && (i != ITEM_SAVE || started);
+            let active =
+                item.active && (i != ITEM_SAVE || started) && (i != ITEM_READ || has_read_this);
             let color = if !active {
                 self.colors.deactive
             } else if i == selected {
@@ -319,8 +342,8 @@ impl Menu {
                 TEXTCOLOR
             };
             let y = MENU_Y + i as i32 * ITEM_STEP;
-            self.font
-                .draw(fb, MENU_X + MENU_INDENT, y, item.label, color);
+            let label = main_item_label(i, started);
+            self.font.draw(fb, MENU_X + MENU_INDENT, y, label, color);
         }
 
         // DrawGun: cursor at x = MENU_X & ~7, y = (MENU_Y - 2) + which*13.
@@ -375,9 +398,9 @@ impl Menu {
         );
     }
 
-    /// The Sound options screen (WL_MENU.C CP_Sound), collapsed to two radio
-    /// groups: sound effects (Digitized+AdLib / AdLib only / None) and music
-    /// (AdLib / None). The filled bullet marks the active option in each group.
+    /// The Sound options screen (WL_MENU.C CP_Sound shape, modern labels).
+    /// Two radio groups: effects (digital / synthesized / off) and music
+    /// (on / off). The DOS hardware names (AdLib, Sound Blaster) are not shown.
     pub fn render_sound(
         &self,
         fb: &mut Framebuffer,
@@ -388,9 +411,9 @@ impl Menu {
         self.clear_mscreen(fb);
         self.draw_stripes(fb, 10);
 
-        // Effects group: 3 rows.
-        let sfx_labels = ["Digitized + AdLib", "AdLib only", "None"];
-        let sfx_active = sfx as usize; // matches SfxMode ordering
+        // Effects group: 3 rows. Order matches [`SfxMode`].
+        let sfx_labels = ["Digital", "Synthesized", "Off"];
+        let sfx_active = sfx as usize;
         self.draw_window(
             fb,
             SM_X - 8,
@@ -407,7 +430,7 @@ impl Menu {
         }
 
         // Music group: 2 rows.
-        let music_labels = ["AdLib", "None"];
+        let music_labels = ["On", "Off"];
         let music_active = if music_on { 0 } else { 1 };
         self.draw_window(
             fb,

@@ -389,8 +389,8 @@ pub struct Engine {
     digi: Option<usize>,
     digi_pos: f64,
     digi_priority: i32,
-    /// When false, sounds that have a digitized version fall back to AdLib (the
-    /// Sound menu's "AdLib only" effects mode).
+    /// When false, sounds that have a digitized version fall back to OPL (the
+    /// Sound menu's "Synthesized" effects mode).
     digi_enabled: bool,
 }
 
@@ -452,8 +452,8 @@ impl Engine {
     }
 
     /// Enable/disable digitized playback. When disabled, sounds that have a
-    /// digitized version play their AdLib rendition instead (the Sound menu's
-    /// "AdLib only" effects mode).
+    /// digitized version play their OPL rendition instead (the Sound menu's
+    /// "Synthesized" effects mode).
     pub fn set_digi_enabled(&mut self, on: bool) {
         self.digi_enabled = on;
     }
@@ -817,7 +817,7 @@ impl Backend {
         let _ = self.tx.send(Cmd::MusicEnabled(on));
     }
 
-    /// Enable/disable digitized sound effects (the "AdLib only" effects mode).
+    /// Enable/disable digitized sound effects (the "Synthesized" effects mode).
     pub fn set_digi_enabled(&self, on: bool) {
         let _ = self.tx.send(Cmd::DigiEnabled(on));
     }

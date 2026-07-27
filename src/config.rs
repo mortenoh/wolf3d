@@ -37,7 +37,7 @@ pub struct Config {
     /// half this, centered in the play area.
     pub view_size: usize,
     /// Sound-effects mode, encoded as [`crate::game::SfxMode`]'s discriminant
-    /// (0 Digi+AdLib, 1 AdLib only, 2 Off).
+    /// (0 Digital, 1 Synthesized, 2 Off).
     pub sfx_mode: u8,
     /// Whether music plays.
     pub music_on: bool,
