@@ -7,9 +7,12 @@
 //! Deterministic like the other headless suites: fixed 1/70 s tics over the
 //! original US_RndT table.
 
+use std::collections::{HashSet, VecDeque};
+
 use wolf3d::actors::Kind;
 use wolf3d::assets::{MapSet, VSwap, VgaGraph, data_dir};
 use wolf3d::fb::Framebuffer;
+use wolf3d::raycast::World;
 use wolf3d::game::{Game, GameScreen, Input, WEAPON_CHAINGUN};
 use wolf3d::variant::Variant;
 
@@ -293,5 +296,98 @@ fn sod_menu_is_blue() {
         distinct.len() > 16,
         "C_BACKDROPPIC should be a textured picture, got {} colors",
         distinct.len()
+    );
+}
+
+/// Every Spear floor has to be walkable from the player's start.
+///
+/// Spear redefines part of WL_ACT1.C's `statinfo[]`, and index 40 (spawn code
+/// 63) is the case that bites: WL6 has a solid floor object there, Spear a lamp
+/// hanging from the ceiling. Treating it as solid walled off six floors — worst
+/// of all the finale, where the one lamp tile outside the spawn nook sealed the
+/// player into 3 tiles with the Angel of Death unreachable.
+#[test]
+fn sod_floors_are_not_walled_off_by_hanging_lamps() {
+    if !sod_present() {
+        return;
+    }
+    let maps = MapSet::load_ext(&data_dir(), "SOD").expect("GAMEMAPS.SOD");
+
+    // Flood fill from the spawn using the engine's own movement rules. Doors
+    // and secret push-walls read as passable — they start solid but the player
+    // opens or pushes them, and the two Spear secret floors are push-wall
+    // mazes. Only real walls and blocking statics stop the fill.
+    let walkable_from_spawn = |idx: usize| -> usize {
+        let level = maps.level(idx);
+        let spawn = wolf3d::raycast::find_spawn(&level);
+        let (plane0, plane1) = (level.plane0.clone(), level.plane1.clone());
+        let world = World::new_variant(level, true);
+        let passable = |x: i32, y: i32| {
+            if !(0..64).contains(&x) || !(0..64).contains(&y) {
+                return false;
+            }
+            let i = y as usize * 64 + x as usize;
+            let door = (90..=101).contains(&plane0[i]);
+            let pushwall = plane1[i] == 98;
+            door || pushwall || !world.blocks_move(x, y)
+        };
+
+        let start = (spawn.x as i32, spawn.y as i32);
+        let mut seen = HashSet::from([start]);
+        let mut queue = VecDeque::from([start]);
+        while let Some((x, y)) = queue.pop_front() {
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let next = (x + dx, y + dy);
+                if passable(next.0, next.1) && seen.insert(next) {
+                    queue.push_back(next);
+                }
+            }
+        }
+        seen.len()
+    };
+
+    // The Angel floor (mapon 20): the whole arena has to be open, not the
+    // 3-tile pocket the lamp used to leave.
+    let angel = walkable_from_spawn(20);
+    assert!(
+        angel > 2000,
+        "the Angel of Death arena should be walkable, reached {angel} tiles"
+    );
+
+    // Tunnels 1 (mapon 0): ten lamps sit in its corridors.
+    let tunnels1 = walkable_from_spawn(0);
+    assert!(
+        tunnels1 > 450,
+        "Tunnels 1 should open up past its lamps, reached {tunnels1} tiles"
+    );
+
+    // No floor should strand the player in a handful of tiles.
+    for idx in 0..maps.num_levels() {
+        let n = walkable_from_spawn(idx);
+        assert!(
+            n > 50,
+            "floor {idx} ({}) strands the player: {n} reachable tiles",
+            maps.level(idx).name
+        );
+    }
+}
+
+/// The lamp is Spear-only: WL6's index 40 is a solid object and still blocks.
+#[test]
+fn wl6_keeps_its_solid_statinfo_40() {
+    let maps = MapSet::load(&data_dir()).expect("GAMEMAPS.WL6");
+    // Drop a code-63 static on the player's start tile, then ask each variant
+    // whether it is solid there.
+    let solid_for = |sod: bool| {
+        let mut level = maps.level(0);
+        let spawn = wolf3d::raycast::find_spawn(&level);
+        let (sx, sy) = (spawn.x as i32, spawn.y as i32);
+        level.plane1[sy as usize * 64 + sx as usize] = 63;
+        World::new_variant(level, sod).blocks_move(sx, sy)
+    };
+    assert!(solid_for(false), "WL6 statinfo index 40 is solid");
+    assert!(
+        !solid_for(true),
+        "Spear's index 40 is a hanging lamp and must not block"
     );
 }

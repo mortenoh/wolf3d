@@ -173,11 +173,32 @@ const STATIC_LAST: u16 = 70;
 const STATIC_LAST_SOD: u16 = 74;
 const SPR_STAT_0: usize = 2;
 
-/// Spawn codes whose object blocks movement (`bo_block` in WL_ACT1.C's
-/// statinfo table): barrels, tables, pillars, trees, wells, and so on.
+/// Spawn codes whose object blocks movement (`block` in WL_ACT1.C's statinfo
+/// table): barrels, tables, pillars, trees, wells, and so on. WL6 values.
 const BLOCKING_STATICS: [u16; 21] = [
     24, 25, 26, 28, 30, 31, 33, 34, 35, 36, 39, 40, 41, 45, 58, 59, 60, 62, 63, 68, 69,
 ];
+
+/// Whether a static spawn code blocks the player, for the given variant.
+///
+/// Spear redefines part of `statinfo[]`. The entry that matters here is index
+/// 40 (code 63): WL6 has a solid floor object there, Spear a lamp hanging from
+/// the ceiling, which must not block the floor beneath it. Keeping WL6's rule
+/// made six Spear floors partly unreachable — worst of all the finale, where
+/// the single lamp tile outside the spawn nook sealed the player into 3 tiles
+/// and left the Angel of Death unreachable. Spear also adds two solid statics
+/// of its own: the marble pillar (71) and the truck (73).
+fn blocks_movement(code: u16, sod: bool) -> bool {
+    if sod {
+        if code == 63 {
+            return false;
+        }
+        if matches!(code, 71 | 73) {
+            return true;
+        }
+    }
+    BLOCKING_STATICS.contains(&code)
+}
 
 /// A pickup type (`bo_*` in WL_DEF.H `stat_t`), i.e. the `type` field of a
 /// `statinfo` entry that isn't `dressing`/`block`. GetBonus (WL_AGENT.C) maps
@@ -409,8 +430,7 @@ impl World {
                     bonus: bonus_for(obj),
                     picked: false,
                 });
-                // SOD marble pillar (71) and truck (73) also block movement.
-                blocked[i] = BLOCKING_STATICS.contains(&obj) || (sod && matches!(obj, 71 | 73));
+                blocked[i] = blocks_movement(obj, sod);
             }
         }
         for (i, &t) in level.plane0.iter().enumerate() {
@@ -815,7 +835,7 @@ impl World {
     }
 
     /// Solid for movement: walls, closed-enough doors, blocking statics.
-    fn blocks_move(&self, x: i32, y: i32) -> bool {
+    pub fn blocks_move(&self, x: i32, y: i32) -> bool {
         let t = tile(&self.level, x, y);
         if is_door(t) {
             return self
