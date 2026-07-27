@@ -19,7 +19,7 @@
 
 use crate::assets::maps::{Level, MAP_SIZE};
 use crate::assets::vswap::{TEX_SIZE, VSwap};
-use crate::fb::{Framebuffer, WIDTH, rgb};
+use crate::fb::{Framebuffer, WIDTH};
 use crate::hud::{KEY_GOLD, KEY_SILVER};
 use crate::savegame::{Reader, SaveError, Writer};
 
@@ -388,6 +388,8 @@ fn facing_cardinal(angle: f32) -> (i32, i32) {
 
 pub struct World {
     pub level: Level,
+    /// Palette index for the flat ceiling (per-floor vgaCeiling).
+    pub ceiling_pal: u8,
     pub statics: Vec<StaticSprite>,
     pub doors: Vec<Door>,
     /// Per-tile door index + 1 (0 = no door).
@@ -409,12 +411,13 @@ pub struct World {
 impl World {
     /// Build the WL6 world (the default variant).
     pub fn new(level: Level) -> Self {
-        Self::new_variant(level, false)
+        Self::new_variant(level, false, 0)
     }
 
     /// Build a world for a given variant. `sod` extends the static-object code
     /// range to include the Spear-of-Destiny statics (codes 71..=74).
-    pub fn new_variant(level: Level, sod: bool) -> Self {
+    /// `level_idx` selects the per-floor ceiling colour.
+    pub fn new_variant(level: Level, sod: bool, level_idx: usize) -> Self {
         let static_last = if sod { STATIC_LAST_SOD } else { STATIC_LAST };
         let mut statics = Vec::new();
         let mut blocked = vec![false; MAP_SIZE * MAP_SIZE];
@@ -461,6 +464,7 @@ impl World {
         let plane0_orig = level.plane0.clone();
         Self {
             level,
+            ceiling_pal: ceiling_pal(level_idx, sod),
             statics,
             doors,
             door_grid,
@@ -935,9 +939,32 @@ fn occupied(world: &World, x: f32, y: f32) -> bool {
 /// Half the horizontal FOV as the camera-plane length: 0.66 ≈ Wolf's ~66°.
 const PLANE_LEN: f32 = 0.66;
 
-/// Wolf's flat ceiling/floor colors.
-const CEILING: u32 = rgb(56, 56, 56);
-const FLOOR: u32 = rgb(112, 112, 112);
+/// Default floor palette index (WL_DRAW.C fills the bottom half with 0x19).
+const FLOOR_PAL: u8 = 0x19;
+
+/// Per-floor ceiling palette indices (WL_DRAW.C `vgaCeiling[]`). Indexed by
+/// overall map index (episode*10 + floor for WL6; mapon for SOD).
+const VGA_CEILING_WL6: [u8; 60] = [
+    0x1d, 0x1d, 0x1d, 0x1d, 0x1d, 0x1d, 0x1d, 0x1d, 0x1d, 0xbf, // E1
+    0x4e, 0x4e, 0x4e, 0x1d, 0x8d, 0x4e, 0x1d, 0x2d, 0x1d, 0x8d, // E2
+    0x1d, 0x1d, 0x1d, 0x1d, 0x1d, 0x2d, 0xdd, 0x1d, 0x1d, 0x98, // E3
+    0x1d, 0x9d, 0x2d, 0xdd, 0xdd, 0x9d, 0x2d, 0x4d, 0x1d, 0xdd, // E4
+    0x7d, 0x1d, 0x2d, 0x2d, 0xdd, 0xd7, 0x1d, 0x1d, 0x1d, 0x2d, // E5
+    0x1d, 0x1d, 0x1d, 0x1d, 0xdd, 0xdd, 0x7d, 0xdd, 0xdd, 0xdd, // E6
+];
+const VGA_CEILING_SOD: [u8; 21] = [
+    0x6f, 0x4f, 0x1d, 0xde, 0xdf, 0x2e, 0x7f, 0x9e, 0xae, 0x7f, //
+    0x1d, 0xde, 0xdf, 0xde, 0xdf, 0xde, 0xe1, 0xdc, 0x2e, 0x1d, 0xdc,
+];
+
+/// Ceiling palette index for a floor (WL_DRAW.C `vgaCeiling[mapon]`).
+pub fn ceiling_pal(level_idx: usize, sod: bool) -> u8 {
+    if sod {
+        VGA_CEILING_SOD.get(level_idx).copied().unwrap_or(0x1d)
+    } else {
+        VGA_CEILING_WL6.get(level_idx).copied().unwrap_or(0x1d)
+    }
+}
 
 /// What a column's ray hit: perpendicular distance, texture chunk, texture u.
 struct Hit {
@@ -1197,8 +1224,8 @@ pub fn render(
     let view_yf = view_y as f32;
 
     // Ceiling / floor halves of the 3D view (only within the view rectangle).
-    let ceil = CEILING;
-    let floor = FLOOR;
+    let ceil = crate::assets::palette::PALETTE[world.ceiling_pal as usize];
+    let floor = crate::assets::palette::PALETTE[FLOOR_PAL as usize];
     let half = view_h / 2;
     for row in view_y..view_y + half {
         let base = row * WIDTH + view_x;
@@ -1267,7 +1294,7 @@ pub fn render(
         order.push(((ax - p.x).powi(2) + (ay - p.y).powi(2), ax, ay, sprite));
     }
     for pr in &actors.projectiles {
-        let sprite = pr.sprite(p.x, p.y);
+        let sprite = pr.sprite(p.x, p.y, actors.sprite_shift());
         order.push((
             (pr.x - p.x).powi(2) + (pr.y - p.y).powi(2),
             pr.x,

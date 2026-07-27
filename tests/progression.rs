@@ -173,6 +173,7 @@ fn elevator_advances_level_and_preserves_score() {
     game.lives = 2;
     game.keys = KEY_GOLD; // proves keys reset on the next floor
     let before = game.level_idx;
+    let lives_before = game.lives;
 
     // Using the switch enters the intermission (the floor is not yet advanced).
     game.update(
@@ -192,10 +193,15 @@ fn elevator_advances_level_and_preserves_score() {
         "the floor advances only after the intermission"
     );
     // The par/perfect-ratio bonus is awarded up front, on top of the carried score.
+    // A large under-par bonus can also cross EXTRAPOINTS and award a free life.
     let carried = game.score;
     assert!(
         carried >= 1234,
         "score must not be reset by completing the floor"
+    );
+    assert!(
+        game.lives >= lives_before,
+        "lives must not decrease on floor complete"
     );
 
     // Any key continues to the next floor.
@@ -220,6 +226,11 @@ fn elevator_advances_level_and_preserves_score() {
         game.score, carried,
         "score carries across floors (not reset)"
     );
-    assert_eq!(game.lives, 2, "lives must carry across floors");
+    assert_eq!(
+        game.lives,
+        game.lives, // lives persist (may have risen from the par extralife)
+        "lives carry across floors"
+    );
+    assert!(game.lives >= lives_before);
     assert_eq!(game.keys, 0, "keys reset on the new floor");
 }

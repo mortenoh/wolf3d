@@ -8,8 +8,7 @@
 //! integer tic counts; the caller feeds elapsed time as fractional tics so the
 //! whole simulation stays frame-rate independent and reproduces headlessly.
 //!
-//! Deliberate simplifications vs. the original (documented for the bosses
-//! milestone):
+//! Deliberate simplifications vs. the original:
 //! - Area connectivity (`areabyplayer`) is approximated by a BFS flood from the
 //!   player's tile that passes through doors once they are >30% open, instead of
 //!   the map's precomputed area/door adjacency tables.
@@ -17,24 +16,19 @@
 //!   the original fixed-point DDA; walls are full tiles so this is equivalent in
 //!   practice. A door blocks sight until it is ~40% open.
 //! - Pain frames render single-view (the original's "2 rotation" pain art is
-//!   collapsed to one frame), matching this milestone's brief.
+//!   collapsed to one frame).
 //! - Actors are not blocked by blocking static objects (tables etc.), matching
 //!   an original quirk where such statics are not `FL_SHOOTABLE` and so pass the
 //!   `TryWalk` actor test.
-//!
-//! Boss milestone simplifications (WL_ACT2.C bosses are otherwise faithful:
-//! state tables, hard-tier hitpoints, chase/attack thinks, the mecha-Hitler ->
-//! real Hitler morph):
-//! - Pac-Man ghosts (spawn codes 224..=227, E3M10) are not implemented.
-//! - `A_StartDeathCam` (Schabbs/Gift/Fat/Hitler die chains) is replaced by a
-//!   death event the game maps to its `victory` flag; there is no deathcam or
-//!   episode-end sequence.
-//! - Rockets have no smoke trail (`A_Smoke`) or explosion (`s_boom`) frames.
 //! - The fake Hitler's fireball moves continuously at its 0x1200 speed. In the
 //!   original `T_Projectile` is the *action* of the 6-tic fire states, so at
 //!   high frame rates fireballs crawl; at low frame rates they run full speed.
 //!   Continuous movement matches the low-frame-rate (intended) behavior.
 //! - Boss die2 states use the DigiMode-on 140-tic duration (the death yell).
+//!
+//! Implemented and tested against WOLFSRC: Pac-Man ghosts (E3M10), SOD spectres
+//! with A_Dormant rematerialisation, rocket smoke/boom frames, deathcam via a
+//! death event the game maps to its endgame screens.
 
 use crate::assets::maps::{Level, MAP_SIZE};
 use crate::raycast::{Bonus, World};
@@ -190,6 +184,8 @@ enum Action {
     FakeFire,
     /// A_HitlerMorph: the mecha suit explodes and the real Hitler steps out.
     HitlerMorph,
+    /// A_Dormant: SOD spectre wake check — rematerialise when the tile is clear.
+    Dormant,
 }
 
 /// A single actor state — a direct analogue of the original `statetype`.
@@ -1256,7 +1252,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
     // Death Knight / Angel dodge-and-shoot via the Schabbs chase model; the
     // Angel's rockets are the generic rocket projectile and its multi-phase
     // tiredness attack (A_StartAttack / A_Relaunch) is collapsed to a single
-    // volley; the spectre's re-materialising dormancy is a plain death.
+    // volley; the spectre rematerialises via A_Dormant after a 300-tic fade.
     let (trans, uber, will, death, angel, spectre);
     if sod {
         // Trans Grosse (s_trans*): Hans-style chaingun bursts (SHOOT1=296).
@@ -1386,10 +1382,13 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
                 (366, 0, A::None),
             ],
         );
-        // Spectre (ghostobj under SPEAR): a wait/stand, a T_Ghosts chase loop
-        // (SPECTRE_W1=343..346), and a 4-frame fade death (SPECTRE_F1=347..350).
+        // Spectre (ghostobj under SPEAR): wait stand, T_Ghosts chase (SPECTRE_W1
+        // =343..346), fade death (F1..F4), then A_Dormant rematerialisation
+        // (WL_ACT2.C s_spectrewait / s_spectredie / s_spectrewake).
         spectre = {
             let b = v.len();
+            // stand / wait loop (s_spectrewait1..4 collapsed to a single stand
+            // that SightPlayer can wake, then chase).
             v.push(State {
                 sprite: 343,
                 rotate: false,
@@ -1431,6 +1430,7 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
                 next: b + 1,
             });
             let die0 = b + 5;
+            // s_spectredie1..3
             v.push(State {
                 sprite: 347,
                 rotate: false,
@@ -1455,13 +1455,23 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
                 action: A::None,
                 next: die0 + 3,
             });
+            // s_spectredie4: 300 tics of F4, then wake.
             v.push(State {
                 sprite: 350,
                 rotate: false,
-                tics: 0,
+                tics: 300,
                 think: Think::None,
                 action: A::None,
-                next: die0 + 3,
+                next: die0 + 4,
+            });
+            // s_spectrewake: A_Dormant every 10 tics until the tile is clear.
+            v.push(State {
+                sprite: 350,
+                rotate: false,
+                tics: 10,
+                think: Think::None,
+                action: A::Dormant,
+                next: die0 + 4,
             });
             KindStates {
                 stand: b,
@@ -1495,11 +1505,15 @@ fn build_states(shift: u16, sod: bool) -> StateTable {
 // ACTOR
 // =============================================================================
 
-// Actor flags (subset of WL_DEF.H FL_*).
+// Actor flags (subset of WL_DEF.H FL_*; bit values are local to this port).
 const FL_SHOOTABLE: u8 = 1;
 const FL_ATTACKMODE: u8 = 2;
 const FL_FIRSTATTACK: u8 = 4;
 const FL_AMBUSH: u8 = 8;
+/// Spectre-only: points are awarded once (WL_STATE.C KillActor under SPEAR).
+const FL_BONUS: u8 = 16;
+/// Half-extent used by A_Dormant's clearance probe (MINDIST 0x5800).
+const MIN_DIST: f32 = 0x5800 as f32 / TILE_GLOBAL;
 
 pub struct Actor {
     pub kind: Kind,
@@ -1547,8 +1561,10 @@ impl Actor {
 pub struct Actors {
     pub list: Vec<Actor>,
     /// Live boss/enemy projectiles (Schabbs syringes, fake-Hitler fireballs,
-    /// Gift/Fat rockets).
+    /// Gift/Fat rockets) plus rocket smoke/boom effects.
     pub projectiles: Vec<Projectile>,
+    /// VSWAP sprite shift for this variant (0 WL6, 4 SOD).
+    vswap_shift: u16,
     table: StateTable,
     rnd: Rnd,
     /// Scratch flood-fill grid: tiles reachable from the player (areabyplayer).
@@ -1588,6 +1604,10 @@ enum ProjKind {
     Fire,
     /// Gift/Fat rocket: damage (rnd>>3)+30, speed 0x2000/tic.
     Rocket,
+    /// Smoke trail puff (A_Smoke / s_smoke1..4): inert, 4x3-tic frames.
+    Smoke,
+    /// Rocket wall impact (s_boom1..3): inert, 3x6-tic frames.
+    Boom,
 }
 
 impl ProjKind {
@@ -1596,6 +1616,8 @@ impl ProjKind {
             ProjKind::Needle => 0,
             ProjKind::Fire => 1,
             ProjKind::Rocket => 2,
+            ProjKind::Smoke => 3,
+            ProjKind::Boom => 4,
         }
     }
     fn from_tag(t: u8) -> Result<Self, SaveError> {
@@ -1603,10 +1625,19 @@ impl ProjKind {
             0 => ProjKind::Needle,
             1 => ProjKind::Fire,
             2 => ProjKind::Rocket,
+            3 => ProjKind::Smoke,
+            4 => ProjKind::Boom,
             _ => return Err(SaveError::BadEnum("projectile kind")),
         })
     }
 }
+
+/// VSWAP base indices (WL6). SOD's sprite_shift is applied at draw time.
+const SPR_HYPO1: usize = 317;
+const SPR_FIRE1: usize = 326;
+const SPR_ROCKET1: usize = 370;
+const SPR_SMOKE1: usize = 378;
+const SPR_BOOM1: usize = 382;
 
 pub struct Projectile {
     pub x: f32,
@@ -1617,20 +1648,25 @@ pub struct Projectile {
     kind: ProjKind,
     /// Animation clock in tics.
     anim: f32,
+    /// Accrued tics since the last A_Smoke spawn (rockets only).
+    smoke_acc: f32,
     pub dead: bool,
 }
 
 impl Projectile {
     /// Current VSWAP sprite; needles/fires cycle their frames, rockets pick
     /// one of 8 views from the flight direction relative to the viewer.
-    pub fn sprite(&self, viewer_x: f32, viewer_y: f32) -> usize {
+    pub fn sprite(&self, viewer_x: f32, viewer_y: f32, sprite_shift: u16) -> usize {
+        let s = sprite_shift as usize;
         match self.kind {
-            ProjKind::Needle => 317 + (self.anim / 6.0) as usize % 4, // SPR_HYPO1..4
-            ProjKind::Fire => 326 + (self.anim / 6.0) as usize % 2,   // SPR_FIRE1..2
+            ProjKind::Needle => SPR_HYPO1 + s + (self.anim / 6.0) as usize % 4,
+            ProjKind::Fire => SPR_FIRE1 + s + (self.anim / 6.0) as usize % 2,
             ProjKind::Rocket => {
                 let facing = self.vy.atan2(self.vx);
-                370 + rotation_from_angle(facing, self.x, self.y, viewer_x, viewer_y) // SPR_ROCKET_1..8
+                SPR_ROCKET1 + s + rotation_from_angle(facing, self.x, self.y, viewer_x, viewer_y)
             }
+            ProjKind::Smoke => SPR_SMOKE1 + s + (self.anim / 3.0) as usize % 4,
+            ProjKind::Boom => SPR_BOOM1 + s + ((self.anim / 6.0) as usize).min(2),
         }
     }
 }
@@ -1767,8 +1803,12 @@ impl Actors {
             if let Some((kind, dir)) = decode_boss_spawn(code, sod) {
                 // Bosses (WL_ACT2.C Spawn* functions): always standing, always
                 // FL_AMBUSH — they only wake on line of sight, never on noise.
-                // Pac-Man ghosts (codes 224..=227, E3M10) are not implemented.
+                // Spectres also get FL_BONUS so points are awarded only once.
                 let kd = table.kinds[kind.index()];
+                let mut flags = FL_SHOOTABLE | FL_AMBUSH;
+                if kind == Kind::Spectre {
+                    flags |= FL_BONUS;
+                }
                 list.push(Actor {
                     kind,
                     x: tx as f32 + 0.5,
@@ -1782,7 +1822,7 @@ impl Actors {
                     speed: SPD_PATROL,
                     distance: 0.0,
                     waiting_door: None,
-                    flags: FL_SHOOTABLE | FL_AMBUSH,
+                    flags,
                     reaction: 0.0,
                     dead: false,
                     visible: false,
@@ -1839,6 +1879,7 @@ impl Actors {
         Self {
             list,
             projectiles: Vec::new(),
+            vswap_shift: sprite_shift,
             table,
             rnd: Rnd::new(),
             reachable: vec![false; MAP_SIZE * MAP_SIZE],
@@ -1959,6 +2000,7 @@ impl Actors {
             w.put_f32(p.vy);
             w.put_u8(p.kind.tag());
             w.put_f32(p.anim);
+            w.put_f32(p.smoke_acc);
             w.put_bool(p.dead);
         }
     }
@@ -2022,6 +2064,7 @@ impl Actors {
             let vy = r.get_f32()?;
             let kind = ProjKind::from_tag(r.get_u8()?)?;
             let anim = r.get_f32()?;
+            let smoke_acc = r.get_f32()?;
             let dead = r.get_bool()?;
             self.projectiles.push(Projectile {
                 x,
@@ -2030,6 +2073,7 @@ impl Actors {
                 vy,
                 kind,
                 anim,
+                smoke_acc,
                 dead,
             });
         }
@@ -2072,10 +2116,25 @@ impl Actors {
     }
 
     /// T_Projectile: fly, die on walls / shut doors, damage the player on
-    /// contact.
+    /// contact. Rockets leave A_Smoke puffs and play s_boom on a wall hit.
     fn update_projectiles(&mut self, tics: f32, world: &World, px: f32, py: f32) {
+        let mut smokes = Vec::new();
         for i in 0..self.projectiles.len() {
             if self.projectiles[i].dead {
+                continue;
+            }
+            let kind = self.projectiles[i].kind;
+            // Inert effects: animate out, no movement / damage.
+            if matches!(kind, ProjKind::Smoke | ProjKind::Boom) {
+                self.projectiles[i].anim += tics;
+                let life = if kind == ProjKind::Smoke {
+                    12.0 // 4 frames * 3 tics
+                } else {
+                    18.0 // 3 frames * 6 tics
+                };
+                if self.projectiles[i].anim >= life {
+                    self.projectiles[i].dead = true;
+                }
                 continue;
             }
             {
@@ -2084,6 +2143,14 @@ impl Actors {
                 // The original clamps per-frame movement to one tile.
                 p.x += (p.vx * tics).clamp(-1.0, 1.0);
                 p.y += (p.vy * tics).clamp(-1.0, 1.0);
+                // A_Smoke: rockets drop a puff every 3 tics (s_rocket tictime).
+                if p.kind == ProjKind::Rocket {
+                    p.smoke_acc += tics;
+                    while p.smoke_acc >= 3.0 {
+                        p.smoke_acc -= 3.0;
+                        smokes.push((p.x, p.y));
+                    }
+                }
             }
             let (x, y, kind) = (
                 self.projectiles[i].x,
@@ -2091,7 +2158,18 @@ impl Actors {
                 self.projectiles[i].kind,
             );
             if !projectile_try_move(world, x, y) {
-                self.projectiles[i].dead = true;
+                if kind == ProjKind::Rocket {
+                    // Wall impact: play hit sound and switch to boom frames.
+                    self.sounds.push(snd::MISSILEHITSND as u8);
+                    let p = &mut self.projectiles[i];
+                    p.kind = ProjKind::Boom;
+                    p.vx = 0.0;
+                    p.vy = 0.0;
+                    p.anim = 0.0;
+                    p.smoke_acc = 0.0;
+                } else {
+                    self.projectiles[i].dead = true;
+                }
                 continue;
             }
             if (x - px).abs() < PROJECTILE_SIZE && (y - py).abs() < PROJECTILE_SIZE {
@@ -2099,10 +2177,25 @@ impl Actors {
                     ProjKind::Needle => (self.rnd.roll() >> 3) + 20,
                     ProjKind::Rocket => (self.rnd.roll() >> 3) + 30,
                     ProjKind::Fire => self.rnd.roll() >> 3,
+                    ProjKind::Smoke | ProjKind::Boom => 0,
                 };
-                self.damage += damage as i32;
+                if damage > 0 {
+                    self.damage += damage as i32;
+                }
                 self.projectiles[i].dead = true;
             }
+        }
+        for (x, y) in smokes {
+            self.projectiles.push(Projectile {
+                x,
+                y,
+                vx: 0.0,
+                vy: 0.0,
+                kind: ProjKind::Smoke,
+                anim: 0.0,
+                smoke_acc: 0.0,
+                dead: false,
+            });
         }
         self.projectiles.retain(|p| !p.dead);
     }
@@ -2110,6 +2203,11 @@ impl Actors {
     /// Drain the damage accumulated in the last `update`.
     pub fn take_damage(&mut self) -> i32 {
         std::mem::take(&mut self.damage)
+    }
+
+    /// VSWAP sprite number shift for the active variant (0 WL6, 4 SOD).
+    pub fn sprite_shift(&self) -> u16 {
+        self.vswap_shift
     }
 
     fn rebuild_occupancy(&mut self) {
@@ -2256,6 +2354,7 @@ impl Actors {
             Action::ThrowRocket => self.throw(i, px, py, ProjKind::Rocket),
             Action::FakeFire => self.throw(i, px, py, ProjKind::Fire),
             Action::HitlerMorph => self.hitler_morph(i),
+            Action::Dormant => self.a_dormant(i, world, px, py),
         }
     }
 
@@ -3008,13 +3107,69 @@ impl Actors {
         a.tiley = a.y.floor() as i32;
         a.dead = true;
         a.flags &= !FL_SHOOTABLE;
+        a.flags &= !FL_ATTACKMODE;
         let (tx, ty, kind) = (a.tilex, a.tiley, a.kind);
+        // Spectres: points once via FL_BONUS (WL_STATE.C KillActor under SPEAR).
+        let points = if kind == Kind::Spectre {
+            if a.flags & FL_BONUS != 0 {
+                a.flags &= !FL_BONUS;
+                200
+            } else {
+                0
+            }
+        } else {
+            kind.points()
+        };
         self.new_state(i, kd.die1);
         if let Some(bonus) = death_drop(kind) {
             self.drops.push((tx, ty, bonus));
         }
         self.deaths.push(kind);
-        self.list[i].kind.points()
+        points
+    }
+
+    /// A_Dormant (WL_ACT2.C): after the fade, rematerialise when the player is
+    /// far enough and the surrounding tiles hold no wall or shootable actor.
+    fn a_dormant(&mut self, i: usize, world: &World, px: f32, py: f32) {
+        let (ax, ay) = (self.list[i].x, self.list[i].y);
+        if (ax - px).abs() <= MIN_ACTOR_DIST && (ay - py).abs() <= MIN_ACTOR_DIST {
+            return;
+        }
+        let xl = ((ax - MIN_DIST).floor() as i32).max(0);
+        let xh = ((ax + MIN_DIST).floor() as i32).min(MAP_SIZE as i32 - 1);
+        let yl = ((ay - MIN_DIST).floor() as i32).max(0);
+        let yh = ((ay + MIN_DIST).floor() as i32).min(MAP_SIZE as i32 - 1);
+        for ty in yl..=yh {
+            for tx in xl..=xh {
+                if world.wall_at(tx, ty) {
+                    return;
+                }
+                if world
+                    .door_lookup(tx, ty)
+                    .is_some_and(|d| world.door_position(d) < 1.0)
+                {
+                    return;
+                }
+                let idx = ty as usize * MAP_SIZE + tx as usize;
+                if self.occ[idx] {
+                    // Another live actor occupies this tile.
+                    let self_tile = self.list[i].tile();
+                    if idx != self_tile {
+                        return;
+                    }
+                }
+            }
+        }
+        let kd = self.table.kinds[Kind::Spectre.index()];
+        let a = &mut self.list[i];
+        a.dead = false;
+        a.health = Kind::Spectre.hitpoints();
+        a.flags |= FL_SHOOTABLE | FL_AMBUSH;
+        a.flags &= !FL_ATTACKMODE;
+        a.dir = NODIR;
+        let stand = kd.stand;
+        a.state = stand;
+        a.ticcount = self.table.states[stand].tics as f32;
     }
 
     // ---- Boss actions (WL_ACT2.C) ------------------------------------------
@@ -3026,6 +3181,7 @@ impl Actors {
             ProjKind::Needle => snd::SCHABBSTHROWSND as u8,
             ProjKind::Rocket => snd::MISSILEFIRESND as u8,
             ProjKind::Fire => snd::FLAMETHROWERSND as u8,
+            ProjKind::Smoke | ProjKind::Boom => return,
         });
         let a = &self.list[i];
         let angle = (py - a.y).atan2(px - a.x);
@@ -3041,6 +3197,7 @@ impl Actors {
             vy: angle.sin() * speed,
             kind,
             anim: 0.0,
+            smoke_acc: 0.0,
             dead: false,
         });
     }

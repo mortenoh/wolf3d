@@ -172,6 +172,9 @@ pub const WEAPON_CHAINGUN: usize = 3;
 /// The original tic rate, so `update` can express timings as fractional tics.
 pub const TIC: f32 = 1.0 / 70.0;
 
+/// WL_DEF.H `EXTRAPOINTS`: score threshold between free lives.
+pub const EXTRAPOINTS: i32 = 40000;
+
 /// How long the "Get Psyched!" load screen lingers (real/sim seconds) before the
 /// already-loaded floor starts. Loads are instant here, so this is purely cosmetic.
 const LOAD_SCREEN_SECS: f32 = 0.5;
@@ -426,6 +429,10 @@ pub struct Game {
     pub lives: i32,
     pub keys: u8,
     pub weapon: usize,
+    /// Highest weapon ever owned (WL_AGENT.C `bestweapon`); gates 1-4 selection.
+    pub bestweapon: usize,
+    /// Next score threshold that awards an extralife (WL_AGENT.C `nextextra`).
+    pub nextextra: i32,
     /// Set the frame the player dies (drained by the frontend/tests).
     pub died: bool,
     /// Set once the current episode's end boss is killed (the original sets
@@ -478,7 +485,7 @@ impl Game {
         let difficulty = Difficulty::Hard;
         let level_idx = level_idx.min(maps.num_levels() - 1);
         let sod = variant.is_sod();
-        let world = World::new_variant(maps.level(level_idx), sod);
+        let world = World::new_variant(maps.level(level_idx), sod, level_idx);
         let player = raycast::find_spawn(&world.level);
         let actors = Actors::spawn_from_level_variant(
             &world.level,
@@ -555,6 +562,8 @@ impl Game {
             lives: 3,
             keys: 0,
             weapon: WEAPON_PISTOL,
+            bestweapon: WEAPON_PISTOL,
+            nextextra: EXTRAPOINTS,
             died: false,
             victory: false,
             spear_pending: false,
@@ -584,7 +593,7 @@ impl Game {
     /// the floor's kill/secret/treasure totals (WL_GAME.C ScanInfoPlane).
     fn load_level(&mut self) {
         let sod = self.variant.is_sod();
-        self.world = World::new_variant(self.maps.level(self.level_idx), sod);
+        self.world = World::new_variant(self.maps.level(self.level_idx), sod, self.level_idx);
         self.player = raycast::find_spawn(&self.world.level);
         self.actors = Actors::spawn_from_level_variant(
             &self.world.level,
@@ -763,7 +772,7 @@ impl Game {
         ];
         let (timeleft, bonus) =
             inter::compute_bonus(time_sec, par_sec, ratios[0], ratios[1], ratios[2]);
-        self.score += bonus; // GivePoints(bonus)
+        self.give_points(bonus); // GivePoints(bonus)
         self.accumulate_episode(); // feed the Victory averages (LevelRatios)
 
         let next = self.compute_next_level(secret);
@@ -1071,6 +1080,7 @@ impl Game {
             self.health = 100;
             self.ammo = 8;
             self.weapon = WEAPON_PISTOL;
+            // bestweapon / nextextra persist across a life (original Died path).
             self.keys = 0;
             self.screen = GameScreen::Playing;
         }
@@ -1177,9 +1187,11 @@ impl Game {
         self.health = demo.health;
         self.ammo = demo.ammo;
         self.weapon = demo.weapon;
+        self.bestweapon = demo.weapon.max(WEAPON_PISTOL);
         self.keys = demo.keys;
         self.god = demo.god;
         self.score = 0;
+        self.nextextra = EXTRAPOINTS;
         self.lives = 3;
         self.died = false;
         self.victory = false;
@@ -1539,6 +1551,8 @@ impl Game {
         w.put_i32(self.lives);
         w.put_u8(self.keys);
         w.put_u32(self.weapon as u32);
+        w.put_u32(self.bestweapon as u32);
+        w.put_i32(self.nextextra);
         w.put_bool(self.victory);
         // In-progress weapon swing (WL_AGENT.C T_Attack): part of the mid-fight
         // state, so a save taken mid-swing resumes at the same animation phase.
@@ -1585,6 +1599,8 @@ impl Game {
         self.lives = r.get_i32()?;
         self.keys = r.get_u8()?;
         self.weapon = r.get_u32()? as usize;
+        self.bestweapon = r.get_u32()? as usize;
+        self.nextextra = r.get_i32()?;
         self.victory = r.get_bool()?;
         self.attacking = r.get_bool()?;
         self.attack_frame = r.get_u32()? as usize;
@@ -1668,6 +1684,8 @@ impl Game {
         self.lives = 3;
         self.keys = 0;
         self.weapon = WEAPON_PISTOL;
+        self.bestweapon = WEAPON_PISTOL;
+        self.nextextra = EXTRAPOINTS;
         self.died = false;
         self.victory = false;
         self.spear_pending = false;
@@ -1688,7 +1706,11 @@ impl Game {
 
     fn update_play(&mut self, dt: f32, input: &Input) {
         if let Some(w) = input.select_weapon {
-            self.weapon = w as usize;
+            // CheckWeaponChange: only weapons the player owns; knife always ok.
+            let w = w as usize;
+            if w == WEAPON_KNIFE || (self.ammo > 0 && w <= self.bestweapon) {
+                self.weapon = w;
+            }
         }
 
         self.stats.time += dt;
@@ -1899,7 +1921,7 @@ impl Game {
             self.player.angle,
             false,
         );
-        self.score += points;
+        self.give_points(points);
         if !self.infinite_ammo {
             self.ammo -= 1;
         }
@@ -1914,7 +1936,7 @@ impl Game {
             self.player.angle,
             true,
         );
-        self.score += points;
+        self.give_points(points);
     }
 
     // --- Pickups (WL_AGENT.C GetBonus) -------------------------------------
@@ -1990,8 +2012,8 @@ impl Game {
                 // 1-up: full health, +25 ammo, +1 life. Counts as treasure
                 // (WL_AGENT.C GetBonus increments treasurecount for bo_fullheal).
                 self.health = 100;
-                self.ammo = (self.ammo + 25).min(99);
-                self.lives += 1;
+                let _ = self.give_ammo(25);
+                self.give_extra_man();
                 self.stats.treasure += 1;
                 true
             }
@@ -2016,28 +2038,53 @@ impl Game {
     }
 
     /// GiveAmmo: add ammo up to 99, skipping (not consuming) the item when full.
+    /// Restores the best gun when ammo was zero (knife-only).
     fn give_ammo(&mut self, amount: i32) -> bool {
         if self.ammo >= 99 {
             return false;
+        }
+        if self.ammo == 0 {
+            self.weapon = self.bestweapon;
         }
         self.ammo = (self.ammo + amount).min(99);
         true
     }
 
-    /// GiveWeapon: +6 ammo and switch to the weapon if it out-ranks the current
-    /// one (the original tracks `bestweapon`; we approximate with `weapon`).
+    /// GiveWeapon (WL_AGENT.C): +6 ammo; raise bestweapon and equip if better.
     fn give_weapon(&mut self, weapon: usize) {
-        self.ammo = (self.ammo + 6).min(99);
-        if self.weapon < weapon {
+        let _ = self.give_ammo(6);
+        if self.bestweapon < weapon {
+            self.bestweapon = weapon;
             self.weapon = weapon;
         }
     }
 
     /// A valuable pickup: score plus a treasure count (WL_AGENT.C GetBonus).
     fn take_treasure(&mut self, points: i32) -> bool {
-        self.score += points;
+        self.give_points(points);
         self.stats.treasure += 1;
         true
+    }
+
+    /// GivePoints (WL_AGENT.C): add score and award extralives at each
+    /// [`EXTRAPOINTS`] threshold.
+    fn give_points(&mut self, points: i32) {
+        if points <= 0 {
+            return;
+        }
+        self.score += points;
+        while self.score >= self.nextextra {
+            self.nextextra += EXTRAPOINTS;
+            self.give_extra_man();
+        }
+    }
+
+    /// GiveExtraMan (WL_AGENT.C): +1 life capped at 9, with the 1-up sound.
+    fn give_extra_man(&mut self) {
+        if self.lives < 9 {
+            self.lives += 1;
+        }
+        self.sounds.push(snd::BONUS1UPSND as u8);
     }
 
     pub fn render(&mut self, fb: &mut Framebuffer) {

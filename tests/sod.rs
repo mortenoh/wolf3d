@@ -321,7 +321,7 @@ fn sod_floors_are_not_walled_off_by_hanging_lamps() {
         let level = maps.level(idx);
         let spawn = wolf3d::raycast::find_spawn(&level);
         let (plane0, plane1) = (level.plane0.clone(), level.plane1.clone());
-        let world = World::new_variant(level, true);
+        let world = World::new_variant(level, true, 0);
         let passable = |x: i32, y: i32| {
             if !(0..64).contains(&x) || !(0..64).contains(&y) {
                 return false;
@@ -383,7 +383,7 @@ fn wl6_keeps_its_solid_statinfo_40() {
         let spawn = wolf3d::raycast::find_spawn(&level);
         let (sx, sy) = (spawn.x as i32, spawn.y as i32);
         level.plane1[sy as usize * 64 + sx as usize] = 63;
-        World::new_variant(level, sod).blocks_move(sx, sy)
+        World::new_variant(level, sod, 0).blocks_move(sx, sy)
     };
     assert!(solid_for(false), "WL6 statinfo index 40 is solid");
     assert!(
