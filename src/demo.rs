@@ -44,14 +44,41 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::demorec::Demo;
+use crate::demorec::{self, Demo};
 use crate::fb::{Framebuffer, HEIGHT, WIDTH};
-use crate::game::{Game, Input, TURN_SPEED};
+use crate::game::{Game, GameScreen, Input, TURN_SPEED};
 
 const DT: f32 = 1.0 / 70.0; // the original's tic rate
 
 /// An in-progress `record:` capture: the output path and the demo being built.
 type Recording = Option<(PathBuf, Demo)>;
+
+/// Headless replay of a recorded `.dm` file at 70 Hz until Attract ends
+/// (level complete, stream end, or death). Returns the final screen name.
+pub fn run_file(game: &mut Game, path: &Path) -> Result<String, String> {
+    let demo = demorec::load_path(path)?;
+    let n = demo.tics.len();
+    let level = demo.level_idx;
+    println!(
+        "play-demo: {} ({} tics, level {}, {})",
+        path.display(),
+        n,
+        level + 1,
+        if demo.god { "god" } else { "mortal" }
+    );
+    game.start_attract_demo(&demo);
+    // Cap: demo length + a little slack for end-of-run screen transitions.
+    let max = n.saturating_add(70 * 5);
+    for tic in 0..max {
+        if game.screen != GameScreen::Attract {
+            println!("play-demo: finished at tic {tic} -> {:?}", game.screen);
+            return Ok(format!("{:?}", game.screen));
+        }
+        game.update(DT, &Input::default());
+    }
+    println!("play-demo: stream exhausted (still {:?})", game.screen);
+    Ok(format!("{:?}", game.screen))
+}
 
 pub fn run(game: &mut Game, script: &str) {
     let out = std::env::var("WOLF3D_SNAP_DIR").unwrap_or_else(|_| "snaps".into());

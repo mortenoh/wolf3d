@@ -1,5 +1,7 @@
 /target
 /data
 /saves
+# Installed release binary (`make release`).
+/bin
 # Headless demo snapshots (`make demo`).
 /snaps

@@ -2,6 +2,8 @@
 //! `Framebuffer`; the GPU's only job is to upload that buffer as a texture
 //! each frame and stretch it onto the window (nearest-neighbor, letterboxed
 //! to 4:3 — the original's display aspect).
+//!
+//! CLI entry: `wolf3d` with no args starts the game. See `wolf3d --help`.
 
 use wolf3d::{config, demo, fb, game};
 
@@ -10,10 +12,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use clap::Parser;
 use wolf3d::demorec::Demo;
 
 use wolf3d::assets::audio::AudioData;
 use wolf3d::sound::{Backend, SoundAssets};
+use wolf3d::variant::Variant;
 
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -637,8 +641,16 @@ impl ApplicationHandler for App {
                         }
                     } else if event.state.is_pressed() && !event.repeat {
                         let playing = self.game.screen == GameScreen::Playing;
-                        // Any key-down advances the title screen.
-                        self.any_key = true;
+                        let fullscreen = self.window.as_ref().is_some_and(|w| is_fullscreen(w));
+                        // Display-management shortcuts are consumed by the
+                        // frontend. They must not also count as "any key" and
+                        // dismiss an attract demo.
+                        let display_shortcut = matches!(code, KeyCode::KeyF | KeyCode::F11)
+                            || (code == KeyCode::Escape && fullscreen);
+                        if !display_shortcut {
+                            // Other key-downs advance title/attract screens.
+                            self.any_key = true;
+                        }
                         match code {
                             KeyCode::KeyQ => event_loop.exit(),
                             KeyCode::KeyF | KeyCode::F11 => {
@@ -649,8 +661,7 @@ impl ApplicationHandler for App {
                             // Esc leaves fullscreen; otherwise it drives the
                             // menu (pause from play / back out of a menu).
                             KeyCode::Escape => {
-                                let fs = self.window.as_ref().is_some_and(|w| is_fullscreen(w));
-                                if fs {
+                                if fullscreen {
                                     if let Some(w) = &self.window {
                                         set_fullscreen(w, false);
                                     }
@@ -805,25 +816,172 @@ fn set_fullscreen(w: &Window, on: bool) {
     w.set_fullscreen(on.then_some(winit::window::Fullscreen::Borderless(None)));
 }
 
+/// Command-line interface. No args / no subcommand starts the game.
+/// See `wolf3d --help` and `wolf3d forge --help`.
+/// Legacy `WOLF3D_*` environment variables are still accepted via clap `env`.
+#[derive(Parser, Debug)]
+#[command(
+    name = "wolf3d",
+    version,
+    about = "Wolfenstein 3D / Spear of Destiny (Rust)",
+    long_about = "Wolfenstein 3D and Spear of Destiny, rewritten in Rust.\n\n\
+With no arguments, opens the game window (title / menu). Game data must be in \
+data/ (see `make data`).\n\n\
+Subcommands:\n  forge   AI-search fair complete-floor demos (warm-start)\n\n\
+Examples:\n  wolf3d\n  wolf3d --level 5\n  wolf3d --play-demo e1m1\n  \
+wolf3d forge --levels 0 --iters 100000"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    /// Start on this floor (1-based). Skips the title screen.
+    #[arg(short, long, env = "WOLF3D_LEVEL", value_name = "N", global = false)]
+    level: Option<usize>,
+
+    /// Game data set: wl6, sod (m1), sd2 (m2), sd3 (m3). Default: auto-detect.
+    #[arg(short, long, env = "WOLF3D_GAME", value_name = "GAME")]
+    game: Option<String>,
+
+    /// Headless scripted input (e.g. 'w:1;use;snap:door'). Writes snapshots.
+    #[arg(long, env = "WOLF3D_DEMO", value_name = "SCRIPT")]
+    demo: Option<String>,
+
+    /// Replay a recorded attract demo (.dm path or stem under demos/).
+    #[arg(long = "play-demo", env = "WOLF3D_PLAY_DEMO", value_name = "DEMO")]
+    play_demo: Option<String>,
+
+    /// No window (use with --play-demo). Also set by WOLF3D_HEADLESS=1.
+    #[arg(long, env = "WOLF3D_HEADLESS", action = clap::ArgAction::SetTrue)]
+    headless: bool,
+
+    /// Record the next play session as an attract demo at PATH.
+    #[arg(long, env = "WOLF3D_RECORD", value_name = "PATH")]
+    record: Option<PathBuf>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    /// AI-search fair complete-floor demos (+100 end, +10 kill, +1 secret).
+    /// Warm-starts from existing demos/*.dm and only overwrites when better.
+    Forge {
+        /// Comma-separated 0-based level indices (default: every WL6 floor).
+        #[arg(long, value_name = "LIST")]
+        levels: Option<String>,
+
+        /// Output directory for .dm files.
+        #[arg(long, default_value = "demos", value_name = "DIR")]
+        out: PathBuf,
+
+        /// Search trials per floor.
+        #[arg(long, default_value_t = 50_000)]
+        iters: u64,
+
+        /// Worker threads (default: CPU count).
+        #[arg(long)]
+        threads: Option<usize>,
+
+        /// Soft max seconds per trial.
+        #[arg(long = "max-secs", default_value_t = 120.0)]
+        max_secs: f32,
+
+        /// Progress log every N trials (default: iters/25).
+        #[arg(long)]
+        progress: Option<u64>,
+
+        /// Make searched and recorded runs invulnerable.
+        #[arg(long)]
+        god: bool,
+
+        /// Candidate objective: normal score, or secrets/loot before score/speed.
+        #[arg(long, value_enum, default_value_t = ForgeFocusArg::Secrets)]
+        focus: ForgeFocusArg,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+enum ForgeFocusArg {
+    Score,
+    #[default]
+    Secrets,
+}
+
+fn variant_from_cli(game: Option<&str>) -> Variant {
+    match game.map(|s| s.to_ascii_lowercase()).as_deref() {
+        Some("sod" | "spear" | "m1") => Variant::sod(),
+        Some("sd2" | "sod2" | "m2") => Variant::sd2(),
+        Some("sd3" | "sod3" | "m3") => Variant::sd3(),
+        Some("wl6" | "wolf3d") => Variant::wl6(),
+        Some(other) => {
+            eprintln!("unknown --game {other:?}; expected wl6, sod, sd2, or sd3");
+            std::process::exit(2);
+        }
+        // No flag: still honor WOLF3D_GAME / auto-detect inside Variant::detect.
+        None => Variant::detect(),
+    }
+}
+
 fn main() {
-    // WOLF3D_LEVEL=n starts on level n (1-based), handy for debugging.
-    let level_env = std::env::var("WOLF3D_LEVEL").ok();
-    let level_idx = level_env
-        .as_ref()
-        .and_then(|v| v.parse::<usize>().ok())
-        .map_or(0, |n| n.saturating_sub(1));
-    let mut game = Game::new(level_idx);
+    let cli = Cli::parse();
+
+    if let Some(Command::Forge {
+        levels,
+        out,
+        iters,
+        threads,
+        max_secs,
+        progress,
+        god,
+        focus,
+    }) = cli.command
+    {
+        let threads = threads.unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        });
+        let level_list = levels.map(|spec| {
+            spec.split(',')
+                .map(|s| s.trim().parse::<usize>().expect("--levels wants integers"))
+                .collect()
+        });
+        let opts = wolf3d::forge::ForgeOptions {
+            levels: level_list.unwrap_or_default(),
+            out_dir: out,
+            iters,
+            threads,
+            max_secs,
+            progress_every: progress.unwrap_or(0),
+            god,
+            focus: match focus {
+                ForgeFocusArg::Score => wolf3d::ai::SearchFocus::Score,
+                ForgeFocusArg::Secrets => wolf3d::ai::SearchFocus::Secrets,
+            },
+        };
+        std::process::exit(wolf3d::forge::run(opts));
+    }
+
+    // --- Default: play the game ---
+    // 1-based floor from --level / WOLF3D_LEVEL; default 0 (E1M1) when absent.
+    let level_pinned = cli.level.is_some();
+    let level_idx = cli.level.map_or(0, |n| n.saturating_sub(1));
+    let variant = variant_from_cli(cli.game.as_deref());
+    let mut game = Game::new_variant(level_idx, variant);
 
     // Boot to the title/menu unless a level is pinned. A gameplay demo script
     // (no `key:` commands) keeps booting straight into play as before; the
     // windowed app and any menu demo (which drives the menu with `key:`) boot
     // to the title screen.
-    let demo_script = std::env::var("WOLF3D_DEMO").ok();
-    let starts_at_menu =
-        level_env.is_none() && demo_script.as_deref().is_none_or(|s| s.contains("key:"));
+    let demo_script = cli.demo;
+    let play_demo = cli.play_demo;
+    // clap SetTrue + env: any set WOLF3D_HEADLESS counts; Makefile uses =1.
+    let headless_play = cli.headless || std::env::var("WOLF3D_HEADLESS").as_deref() == Ok("1");
+    let starts_at_menu = !level_pinned
+        && demo_script.as_deref().is_none_or(|s| s.contains("key:"))
+        && play_demo.is_none();
     // The "Get Psyched!" load screen only runs in the plain windowed game; the
-    // demo and WOLF3D_LEVEL paths skip it (instant loads, deterministic runs).
-    game.show_load_screen = level_env.is_none() && demo_script.is_none();
+    // demo and --level paths skip it (instant loads, deterministic runs).
+    game.show_load_screen = !level_pinned && demo_script.is_none() && play_demo.is_none();
     if starts_at_menu {
         game.to_title();
     }
@@ -834,11 +992,34 @@ fn main() {
     // simulation until a demo is actually played.
     game.load_attract_demos();
 
-    // WOLF3D_DEMO="w:1;use;wait:1;snap:door" plays scripted input headless
-    // (no window) and writes framebuffer snapshots; see src/demo.rs.
+    // --demo / WOLF3D_DEMO: scripted input headless (no window), snapshots.
     if let Some(script) = demo_script {
         demo::run(&mut game, &script);
         return;
+    }
+
+    // --play-demo / WOLF3D_PLAY_DEMO: replay a recorded .dm.
+    // With --headless this runs without a window and exits when the demo ends;
+    // otherwise the window opens on the Attract screen playing that file.
+    if let Some(spec) = play_demo {
+        let path = wolf3d::demorec::resolve_path(&spec);
+        if headless_play {
+            if let Err(e) = demo::run_file(&mut game, &path) {
+                eprintln!("play-demo: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        let recorded = wolf3d::demorec::load_path(&path).unwrap_or_else(|e| {
+            eprintln!("play-demo: {e}");
+            std::process::exit(1);
+        });
+        game.start_attract_demo(&recorded);
+        println!(
+            "play-demo: {} ({} tics) — any key returns to the menu",
+            path.display(),
+            recorded.tics.len()
+        );
     }
 
     // Load persistent options (view size, sound, music, mouse sensitivity) for
@@ -848,10 +1029,8 @@ fn main() {
         game.apply_config(&cfg);
     }
 
-    // WOLF3D_RECORD=path: capture the next play session (level start until
-    // death / level exit / Esc) as an attract demo. Recorded sessions run at a
-    // fixed 70 Hz timestep and embed render-visibility effects per tic.
-    let record_path = std::env::var("WOLF3D_RECORD").ok().map(PathBuf::from);
+    // --record / WOLF3D_RECORD: capture the next play session as an attract demo.
+    let record_path = cli.record;
 
     // Open the audio device for the windowed path. Any failure (no device, no
     // sound data) is non-fatal: the game just runs silent.

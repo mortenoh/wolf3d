@@ -2,9 +2,11 @@
 name = "wolf3d"
 version = "0.1.0"
 edition = "2024"
+default-run = "wolf3d"
 
 [dependencies]
 bytemuck = "1.25.1"
+clap = { version = "4", features = ["derive", "env"] }
 pollster = "1.0.1"
 wgpu = "30.0.0"
 winit = "0.30.13"

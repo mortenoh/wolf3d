@@ -57,17 +57,60 @@ enough. On Linux, cpal's ALSA backend also needs the system headers
 `make` (or `make help`) lists every target. The ones you want:
 
 ```
-make build-release   # build the optimized binary
+make build-release   # build the host optimized binary
+make release         # macOS: universal arm64+x86_64 via lipo -> bin/wolf3d
+                     # other OS: host release -> bin/wolf3d
 make test            # run the test suite (needs the extracted data)
 make ci              # fmt-check + clippy + release build + test compile
 make fmt             # format the source
 make clean           # cargo clean (clean-data/clean-saves/distclean also exist)
 ```
 
-`make run LEVEL=5` starts on a given level, and `make record OUT=demos/x.dm`
-captures a play session as an attract demo. `make gen-demos` rebuilds one
-headless complete-floor demo per registered WL6 map (`demos/e1m1.dm` …
-`e6m10.dm`) for attract-mode and CI coverage.
+On macOS, `make release` builds both `aarch64-apple-darwin` and
+`x86_64-apple-darwin`, then `lipo -create`s them into `bin/wolf3d` (same
+universal-binary approach as [macgames](https://github.com/mortenoh/macgames)).
+Missing Rust targets are installed with `rustup` automatically.
+
+`wolf3d` is a clap CLI: **no args starts the game**; `wolf3d --help` lists
+options and subcommands. After `make release`, run `./bin/wolf3d`.
+
+```
+./bin/wolf3d                         # play (title / menu)
+./bin/wolf3d --level 5               # start on floor 5
+./bin/wolf3d --game sod              # Spear of Destiny M1
+./bin/wolf3d --play-demo e1m1        # replay demos/e1m1.dm
+./bin/wolf3d forge --help            # AI demo forge
+./bin/wolf3d forge --levels 0 --iters 100000
+./bin/wolf3d forge --levels 0 --god --focus secrets
+./bin/wolf3d --help
+```
+
+**AI demo forge** (`wolf3d forge` / `make gen-demos`): multi-thread search for
+fair clears by default (pistol, live enemies, no god; boss floors use a
+plausible carried chaingun/99-ammo loadout). Score: **+100** finish,
+**+10** kill, **+1** secret (faster breaks ties). `--god` enables invulnerable
+Forge defaults to `--focus secrets`: it forces secret-seeking policies, enters opened rooms,
+collects nearby rewards, and ranks completions by secrets, collected pickups
+(health/ammo/weapons/keys/treasure), normal score, then speed. Warm-starts from existing
+`demos/eXmY.dm` and only overwrites when better.
+Use `--focus score` (or `FOCUS=score` with make) for the original
+finish/kill/secret point objective instead.
+
+```
+make gen-demo LEVEL=0 ITERS=100000
+make gen-demos ITERS=50000 THREADS=8
+make gen-demo LEVEL=0 ITERS=100000 GOD=1 FOCUS=secrets
+```
+
+The Makefile still sets the legacy `WOLF3D_*` env vars for play targets; those
+map to the same top-level flags.
+
+```
+make play-demo DEMO=e1m1              # watch demos/e1m1.dm in a window
+make play-demo DEMO=demos/e3m9.dm     # full path also works
+make play-demo DEMO=e1m1 HEADLESS=1   # no window; exit when the demo ends
+make demo SCRIPT='w:1;use;snap:door'  # scripted headless run (not a .dm file)
+```
 
 ## Controls
 

@@ -62,9 +62,11 @@ use crate::savegame::{Reader, SaveError, Writer};
 
 /// File magic: identifies a Wolf3D demo recording.
 pub const MAGIC: &[u8; 8] = b"WOLF3DDM";
-/// Current on-disk format version. Bumped to 2 to tag the game variant so a WL6
-/// demo is never replayed under Spear of Destiny (or vice versa).
-pub const VERSION: u16 = 2;
+/// Current on-disk format version.
+/// - 1: original header
+/// - 2: variant tag (WL6 vs SOD)
+/// - 3: `clear_actors` so gen demos recorded without grunts replay the same way
+pub const VERSION: u16 = 3;
 
 /// Variant tag stored in the demo header: 0 = WL6, 1 = Spear of Destiny.
 pub const VAR_WL6: u8 = 0;
@@ -105,6 +107,9 @@ pub struct Demo {
     /// embedded per tic; playback re-marks visibility each tic). False for
     /// headless recordings (playback neutralizes visibility instead).
     pub windowed: bool,
+    /// When true, attract playback clears the actor list after load (matches
+    /// gen_level_demos recordings that path through an empty map).
+    pub clear_actors: bool,
     /// One input per tic, in playback order.
     pub tics: Vec<Input>,
 }
@@ -133,6 +138,8 @@ impl Demo {
             keys: game.keys,
             god: game.god,
             windowed: false,
+            // Capture whether the recorder emptied the map (gen_level_demos).
+            clear_actors: game.actors.list.is_empty(),
             tics: Vec::new(),
         }
     }
@@ -161,6 +168,7 @@ impl Demo {
         w.put_u8(self.keys);
         w.put_bool(self.god);
         w.put_bool(self.windowed);
+        w.put_bool(self.clear_actors);
         w.put_u32(self.tics.len() as u32);
         for input in &self.tics {
             pack_input(&mut w, input);
@@ -178,7 +186,7 @@ impl Demo {
         // Version 1 predates the variant tag; those demos are all WL6.
         let variant = match version {
             1 => VAR_WL6,
-            2 => r.get_u8()?,
+            2 | 3 => r.get_u8()?,
             v => return Err(SaveError::BadVersion(v)),
         };
         let level_idx = r.get_u32()? as usize;
@@ -194,6 +202,8 @@ impl Demo {
         let keys = r.get_u8()?;
         let god = r.get_bool()?;
         let windowed = r.get_bool()?;
+        // v3+: whether the recording ran with an emptied actor list.
+        let clear_actors = if version >= 3 { r.get_bool()? } else { false };
         let ntics = r.get_u32()? as usize;
         let mut tics = Vec::with_capacity(ntics);
         for _ in 0..ntics {
@@ -214,6 +224,7 @@ impl Demo {
             keys,
             god,
             windowed,
+            clear_actors,
             tics,
         })
     }
@@ -332,4 +343,26 @@ pub fn load_all() -> Vec<Demo> {
                 .and_then(|d| Demo::from_bytes(&d).ok())
         })
         .collect()
+}
+
+/// Resolve a demo path: absolute/relative paths as-is; a bare stem like `e1m1`
+/// becomes `demos/e1m1.dm` under [`demos_dir`].
+pub fn resolve_path(spec: &str) -> PathBuf {
+    let p = PathBuf::from(spec);
+    if p.extension().is_some_and(|e| e == "dm") || p.exists() {
+        return p;
+    }
+    // Bare name: "e1m1" or "e1m1.dm" without a directory.
+    let name = if spec.ends_with(".dm") {
+        spec.to_string()
+    } else {
+        format!("{spec}.dm")
+    };
+    demos_dir().join(name)
+}
+
+/// Load one demo file. Returns a clear error for missing/corrupt paths.
+pub fn load_path(path: &Path) -> Result<Demo, String> {
+    let data = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    Demo::from_bytes(&data).map_err(|e| format!("parse {}: {e:?}", path.display()))
 }

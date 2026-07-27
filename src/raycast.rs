@@ -115,7 +115,7 @@ pub struct Door {
     tex_base: usize,
     /// Required key bitmask to open (0 = unlocked). Matches `gamestate.keys`:
     /// 1 = gold, 2 = silver (WL_ACT1.C `dr_lock1`/`dr_lock2`).
-    lock: u8,
+    pub lock: u8,
     /// Open fraction: 0 = closed, 1 = fully slid into the wall.
     pub position: f32,
     state: DoorState,

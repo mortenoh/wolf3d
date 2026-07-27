@@ -2,6 +2,7 @@
 //! data files, displayed through a minimal winit/wgpu blit (see main.rs).
 
 pub mod actors;
+pub mod ai;
 pub mod assets;
 pub mod autopilot;
 pub mod config;
@@ -10,6 +11,7 @@ pub mod demorec;
 pub mod fb;
 pub mod fizzle;
 pub mod font;
+pub mod forge;
 pub mod game;
 pub mod highscore;
 pub mod hud;

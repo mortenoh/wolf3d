@@ -650,6 +650,57 @@ impl Game {
         self.weapon_frame = 0;
     }
 
+    /// Fast floor restart for AI search trials: reloads the map, resets to a
+    /// normal pistol start, and seeds the actor RNG. Reuses loaded assets so
+    /// millions of trials don't re-read VSWAP/maps from disk.
+    ///
+    /// Uses **Baby** skill so a fair (no-god) bot can finish long key+elevator
+    /// routes for attract demos. Hard/Normal pack so many grunts that chip
+    /// damage kills the any% run on floors like e1m5 before the exit.
+    pub fn prepare_ai_run(&mut self, level_idx: usize, rng_seed: u32) {
+        let n = self.maps.num_levels();
+        self.level_idx = level_idx.min(n.saturating_sub(1));
+        self.difficulty = Difficulty::Baby;
+        self.load_level();
+        self.health = 100;
+        self.ammo = 8;
+        self.score = 0;
+        self.lives = 3;
+        self.keys = 0;
+        self.weapon = WEAPON_PISTOL;
+        self.bestweapon = WEAPON_PISTOL;
+        // Boss floors are not entered from a fresh New Game in normal play:
+        // the player's episode loadout carries in. Give forge trials a
+        // plausible floor-9 carry-over kit instead of making a mortal
+        // pistol+8-bullets recording mathematically unwinnable.
+        if !self.world.level.plane0.contains(&21) {
+            self.ammo = 99;
+            self.weapon = WEAPON_CHAINGUN;
+            self.bestweapon = WEAPON_CHAINGUN;
+        }
+        self.nextextra = EXTRAPOINTS;
+        self.died = false;
+        self.victory = false;
+        self.god = false;
+        self.infinite_ammo = false;
+        self.started = true;
+        self.should_quit = false;
+        self.show_load_screen = false;
+        self.screen = GameScreen::Playing;
+        self.attacking = false;
+        self.attack_frame = 0;
+        self.attack_count = 0.0;
+        self.weapon_frame = 0;
+        self.fire_held = false;
+        self.inter = None;
+        self.autopilot = None;
+        self.actors.set_rng_index(rng_seed as usize);
+        self.actors.set_snd_rng_index((rng_seed >> 8) as usize);
+        // Drain any pending sounds from the fresh spawn.
+        let _ = self.actors.take_sounds();
+        let _ = self.world.take_sounds();
+    }
+
     pub fn switch_level(&mut self, dir: i32) {
         let n = self.maps.num_levels() as i32;
         self.level_idx = (self.level_idx as i32 + dir).rem_euclid(n) as usize;
@@ -1265,15 +1316,13 @@ impl Game {
         self.attract_fb = Some(fb);
     }
 
-    /// Set up and enter demo `demo` for attract playback: rebuild the world,
-    /// actors and player start from the recorded header, then replay its inputs.
-    pub fn start_attract_demo(&mut self, demo: &Demo) {
+    /// Restore level + player/loadout/RNG from a demo header (no attract loop).
+    /// Used by the AI forge to re-score on-disk champions for warm starts.
+    pub fn load_demo_state(&mut self, demo: &Demo) {
         self.difficulty = Difficulty::from_index(demo.difficulty as usize);
         self.level_idx = demo.level_idx.min(self.maps.num_levels() - 1);
         self.reset_episode_stats();
         self.load_level();
-        // Restore the recorded starting camera, loadout and RNG so the replay is
-        // bit-identical to the recording.
         self.player.x = demo.player_x;
         self.player.y = demo.player_y;
         self.player.angle = demo.player_angle;
@@ -1290,6 +1339,19 @@ impl Game {
         self.victory = false;
         self.actors.set_rng_index(demo.rng_index);
         self.actors.set_snd_rng_index(demo.snd_rng_index);
+        if demo.clear_actors {
+            self.actors.list.clear();
+        }
+        self.autopilot = None;
+        self.show_load_screen = false;
+        self.started = true;
+        self.screen = GameScreen::Playing;
+    }
+
+    /// Set up and enter demo `demo` for attract playback: rebuild the world,
+    /// actors and player start from the recorded header, then replay its inputs.
+    pub fn start_attract_demo(&mut self, demo: &Demo) {
+        self.load_demo_state(demo);
         self.attract_tics = demo.tics.clone();
         self.attract_cursor = 0;
         self.attract_accum = 0.0;
