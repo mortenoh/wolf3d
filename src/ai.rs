@@ -894,12 +894,19 @@ impl Brain {
         let (sl, sr) = (strafe_left, !strafe_left);
         let panic = game.health < self.policy.panic_health;
         let combat_aligned = turn.abs() < 0.5;
+        let dry = game.ammo == 0;
         Some(Input {
-            fire: aim_ok && game.ammo > 0,
+            // With the knife selected, close and swing. The old shared ammo
+            // gate selected the knife but could never actually attack with it.
+            fire: aim_ok && (!dry || dist < 1.7),
             turn_left: turn < -0.02,
             turn_right: turn > 0.02,
-            back: dist < if panic { 4.5 } else { 2.8 },
-            forward: dist > if panic { 9.0 } else { 6.5 } && aim_ok,
+            back: !dry && dist < if panic { 4.5 } else { 2.8 },
+            forward: if dry {
+                dist > 1.1 && aim_ok
+            } else {
+                dist > if panic { 9.0 } else { 6.5 } && aim_ok
+            },
             // Human-rate combat: circle-strafe once the target is broadly in
             // view, but fire only under the narrower aim tolerance.
             run: combat_aligned,
@@ -2284,6 +2291,36 @@ mod multi_goal_smoke {
             }
         }
         assert!(completed, "mortal E1M9 boss search did not finish");
+    }
+
+    #[test]
+    fn dry_combat_swings_the_selected_knife() {
+        let mut game = Game::new(0);
+        game.prepare_ai_run(0, 1);
+        let (ax, ay, stand) = game
+            .actors
+            .list
+            .iter()
+            .filter(|actor| !actor.dead && !actor.kind.is_ghost())
+            .find_map(|actor| {
+                let tile = (actor.x.floor() as i32, actor.y.floor() as i32);
+                neighbors(tile.0, tile.1)
+                    .into_iter()
+                    .find(|&(x, y)| walkable(&game, x, y))
+                    .map(|stand| (actor.x, actor.y, stand))
+            })
+            .expect("E1M1 has an approachable guard");
+        game.player.x = stand.0 as f32 + 0.5;
+        game.player.y = stand.1 as f32 + 0.5;
+        game.player.angle = (ay - game.player.y).atan2(ax - game.player.x);
+        game.ammo = 0;
+
+        let mut brain = Brain::fair(Policy::speedrun(1), &game);
+        let input = brain
+            .tick_combat_range(&game, 2.0)
+            .expect("guard is in knife range");
+        assert_eq!(input.select_weapon, Some(0));
+        assert!(input.fire, "dry AI selected the knife but did not swing");
     }
 
     #[test]
