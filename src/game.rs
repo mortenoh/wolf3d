@@ -132,8 +132,8 @@ pub enum GameScreen {
     /// The Change View screen (WL_MENU.C CP_ChangeView): left/right resize the
     /// 3D viewport, previewed live over the current world.
     ChangeView,
-    /// The Control screen (WL_MENU.C CP_Control): the mouse-sensitivity slider
-    /// (full key rebinding is out of scope).
+    /// The Control screen (WL_MENU.C CP_Control): mouse-look sensitivity plus a
+    /// fixed-controls reminder (full key rebinding is out of scope).
     Control,
 }
 
@@ -1453,8 +1453,8 @@ impl Game {
 
     // --- Control (WL_MENU.C CP_Control, simplified) ------------------------
 
-    /// The mouse-sensitivity slider (0..=20); left/right adjust it. Full key
-    /// rebinding is out of scope. Esc/Enter returns to the main menu.
+    /// The mouse-sensitivity slider (0..=20); left/right adjust it. Key
+    /// rebinding is not offered. Esc/Enter returns to the main menu.
     fn update_control(&mut self, input: &Input) {
         if input.menu_left && self.mouse_sensitivity > 0 {
             self.mouse_sensitivity -= 1;

@@ -566,19 +566,20 @@ impl Menu {
     }
 
     /// Control (WL_MENU.C CP_Control, simplified): a mouse-sensitivity slider
-    /// (0..=20) with a footer that documents the play shortcuts. Full key
-    /// rebinding is intentionally out of scope.
+    /// (0..=20) plus a short fixed-controls reminder. Full key rebinding is
+    /// intentionally out of scope; see the README Controls section for the full
+    /// modern / classic-style mapping.
     pub fn render_control(&self, fb: &mut Framebuffer, sensitivity: usize) {
         self.clear_mscreen(fb);
         self.draw_stripes(fb, 10);
         self.font.draw_centered(fb, 34, "CONTROL", HIGHLIGHT);
 
-        self.draw_window(fb, 40, 58, 240, 44, self.colors.bkgd);
-        self.font.draw(fb, 52, 64, "Mouse Sensitivity", TEXTCOLOR);
+        self.draw_window(fb, 40, 50, 240, 44, self.colors.bkgd);
+        self.font.draw(fb, 52, 56, "Mouse Sensitivity", TEXTCOLOR);
 
         // Slider track (0..=20) with a highlight knob.
         let track_x = 52;
-        let track_y = 84;
+        let track_y = 76;
         let track_w = 190;
         bar(fb, track_x, track_y, track_w, 4, self.colors.deactive);
         let knob = track_x + sensitivity as i32 * (track_w - 6) / MAX_MOUSE_SENS as i32;
@@ -591,27 +592,35 @@ impl Menu {
             HIGHLIGHT,
         );
 
-        let fy = 118;
+        let fy = 108;
         self.font.draw_centered(
             fb,
             fy,
             "Left / Right adjust  -  Enter / Esc accepts",
             TEXTCOLOR,
         );
+        // Fixed play mapping (both schemes are always live). Keep lines short
+        // enough for the 320-wide proportional menu font.
+        self.font
+            .draw_centered(fb, fy + 16, "WASD + mouse look, or arrows", TEXTCOLOR);
         self.font.draw_centered(
             fb,
-            fy + 13,
-            "Key rebinding not available",
-            self.colors.deactive,
-        );
-        self.font.draw_centered(
-            fb,
-            fy + 30,
-            "Shortcuts:  M music   6 warp   7 god",
+            fy + 29,
+            "Fire: click / Space / Ctrl   Open: RMB / E",
             TEXTCOLOR,
         );
-        self.font
-            .draw_centered(fb, fy + 43, "8 items   9 infinite ammo   0 all", TEXTCOLOR);
+        self.font.draw_centered(
+            fb,
+            fy + 42,
+            "Shift run   1-4 weapons   wheel cycles",
+            TEXTCOLOR,
+        );
+        self.font.draw_centered(
+            fb,
+            fy + 58,
+            "Cheats: 6 warp  7 god  8 items  9 ammo  0 MLI",
+            self.colors.deactive,
+        );
     }
 
     pub fn render_load(&self, fb: &mut Framebuffer, slots: &[Option<String>], selected: usize) {

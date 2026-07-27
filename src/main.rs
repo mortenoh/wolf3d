@@ -416,7 +416,7 @@ impl App {
             strafe_right: down(KeyCode::KeyD),
             turn_left: down(KeyCode::ArrowLeft),
             turn_right: down(KeyCode::ArrowRight),
-            run: down(KeyCode::ShiftLeft),
+            run: down(KeyCode::ShiftLeft) || down(KeyCode::ShiftRight),
             use_door: std::mem::take(&mut self.use_pressed),
             select_weapon: self.weapon_pressed.take(),
             fire: down(KeyCode::Space)

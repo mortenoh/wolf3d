@@ -58,10 +58,25 @@ captures a play session as an attract demo.
 
 ## Controls
 
-WASD + mouse (mouse look, left click fire, right click open, wheel weapon
-switch), or arrows/Space/E. Shift runs, 1-4 select weapons, M toggles music,
-F fullscreen, Esc menu, Q quit. Cheats: 6 level warp, 7 god, 8 items, 9
-infinite ammo, 0 the classic MLI.
+Two schemes work at the same time (there is no mode toggle):
+
+**Modern**
+- WASD move and strafe; mouse look
+- Left click fire, right click open doors / push walls
+- Mouse wheel cycles weapons
+
+**Classic-style**
+- Arrow keys move and turn (no strafe on the arrows alone)
+- Space or Ctrl fire; E open doors / push walls
+- Shift run (left or right)
+
+**Always**
+- 1-4 select knife / pistol / machine gun / chaingun
+- M toggles music, F or F11 fullscreen, Esc menu, Q quit
+- Main menu → Control: mouse-look sensitivity (key rebinding is not offered)
+
+**Cheats** (during play): 6 level warp, 7 god mode, 8 free items, 9 infinite
+ammo, 0 the classic MLI (full health/ammo/keys, score wiped).
 
 ## Headless verification
 
