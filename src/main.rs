@@ -394,6 +394,9 @@ impl App {
             if self.game.god {
                 cheats.push_str(" [GOD]");
             }
+            if self.game.autopilot_active() {
+                cheats.push_str(" [AI]");
+            }
             if self.game.infinite_ammo {
                 cheats.push_str(" [AMMO]");
             }
@@ -700,6 +703,15 @@ impl ApplicationHandler for App {
                                 self.game.ammo = 99;
                                 self.game.keys = wolf3d::hud::KEY_GOLD | wolf3d::hud::KEY_SILVER;
                                 self.game.score = 0;
+                            }
+                            // Autopilot: finish the current floor (test feature).
+                            KeyCode::KeyI if playing => {
+                                let on = self.game.toggle_autopilot();
+                                eprintln!(
+                                    "autopilot: {}",
+                                    if on { "ON — finishing floor" } else { "off" }
+                                );
+                                self.refresh_title();
                             }
                             KeyCode::KeyN => {
                                 self.game.switch_level(1);

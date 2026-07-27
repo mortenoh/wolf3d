@@ -411,24 +411,40 @@ fn shipped_demos_load_and_replay() {
         !demos.is_empty(),
         "demos/ should ship at least one attract demo"
     );
+    // Full-floor demos leave Attract early when the elevator/boss ends the
+    // run; walkabout demos stay until the stream ends. Both must return to
+    // the title without dying.
     for demo in &demos {
         assert!(!demo.windowed, "shipped demos are headless recordings");
         assert!(!demo.tics.is_empty());
-        // Each demo replays to completion without the run ending early (no
-        // death, no level exit) and loops back to the title.
         let mut game = Game::new(0);
         game.to_title();
         game.start_attract_demo(demo);
-        for _ in 0..demo.tics.len() {
-            assert_eq!(
-                game.screen,
-                GameScreen::Attract,
-                "shipped demo ended early (died or exited the level?)"
-            );
+        for _ in 0..=demo.tics.len() {
+            if game.screen != GameScreen::Attract {
+                break;
+            }
             game.update(DT, &Input::default());
         }
-        game.update(DT, &Input::default());
-        assert_eq!(game.screen, GameScreen::Title);
+        assert_ne!(
+            game.screen,
+            GameScreen::Death,
+            "shipped demo must not die mid-run"
+        );
+        for _ in 0..demo.tics.len() {
+            if game.screen != GameScreen::Attract {
+                break;
+            }
+            game.update(DT, &Input::default());
+        }
+        if game.screen == GameScreen::Attract {
+            game.update(DT, &Input::default());
+        }
+        assert_eq!(
+            game.screen,
+            GameScreen::Title,
+            "demo should return to the title when finished"
+        );
         assert!(game.health > 0, "the shipped demo must survive its run");
     }
 }

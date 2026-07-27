@@ -611,24 +611,30 @@ impl Menu {
     }
 
     /// Change View (WL_MENU.C `DrawChangeView`): the live 3D preview is already
-    /// in the framebuffer; repaint the status-bar strip and print the original
-    /// sizing instructions there (`STR_SIZE1`/`2`/`3`).
-    pub fn render_change_view(&self, fb: &mut Framebuffer, view_w: usize) {
+    /// in the framebuffer; repaint only the status-bar strip (`VIEWCOLOR`) and
+    /// print the original sizing instructions there (`STR_SIZE1`/`2`/`3`).
+    ///
+    /// The original never prints a size unit: CP_ChangeView steps `viewwidth/16`
+    /// in 4..=19 (64..=304). A 320-wide (unit 20) full view is the classic
+    /// default and config max, but the menu will not step past unit 19 — the
+    /// preview border alone shows the current size.
+    pub fn render_change_view(&self, fb: &mut Framebuffer, _view_w: usize) {
         // VWB_Bar(0,160,320,40,VIEWCOLOR) — teal strip where the HUD normally is.
+        // Only the status area: play rows 0..160 keep the live 3D preview.
         const VIEWCOLOR: u8 = 127;
         bar(fb, 0, 160, WIDTH as i32, 40, VIEWCOLOR);
         // STR_SIZE1 / STR_SIZE2 / STR_SIZE3 (FOREIGN.H), PrintY = 161.
-        let size = view_w / 16; // original units 4..=20
-        let lines = [
-            format!("Use arrows to size  < {size} >"),
-            "ENTER to accept".to_string(),
-            "ESC to cancel".to_string(),
+        // US_CPrint advances PrintY by font height per line (no extra gap).
+        const LINES: [&str; 3] = [
+            "Use arrows to size", // STR_SIZE1
+            "ENTER to accept",    // STR_SIZE2
+            "ESC to cancel",      // STR_SIZE3
         ];
         let fh = self.font.height() as i32;
         let mut y = 161;
-        for line in &lines {
+        for line in LINES {
             self.font.draw_centered(fb, y, line, HIGHLIGHT);
-            y += fh + 1;
+            y += fh;
         }
     }
 

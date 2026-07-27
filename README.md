@@ -65,7 +65,9 @@ make clean           # cargo clean (clean-data/clean-saves/distclean also exist)
 ```
 
 `make run LEVEL=5` starts on a given level, and `make record OUT=demos/x.dm`
-captures a play session as an attract demo.
+captures a play session as an attract demo. `make gen-demos` rebuilds one
+headless complete-floor demo per registered WL6 map (`demos/e1m1.dm` …
+`e6m10.dm`) for attract-mode and CI coverage.
 
 ## Controls
 
@@ -88,6 +90,10 @@ Two schemes work at the same time (there is no mode toggle):
 
 **Cheats** (during play): 6 level warp, 7 god mode, 8 free items, 9 infinite
 ammo, 0 the classic MLI (full health/ammo/keys, score wiped).
+
+**Autopilot** (during play): `I` toggles a bot that finishes the current floor
+(pathfinds to the elevator, or kills the end boss on boss maps). While it is
+on the window title shows `[AI]`; press `I` again to take back control.
 
 ## Headless verification
 

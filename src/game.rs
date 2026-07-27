@@ -4,6 +4,7 @@
 
 use crate::actors::{Actors, Kind, Rnd};
 use crate::assets::{self, MapSet, VSwap, VgaGraph};
+use crate::autopilot::Autopilot;
 use crate::config::{self, Config, MAX_MOUSE_SENS, MAX_VIEW, MIN_VIEW, VIEW_STEP};
 use crate::demorec::Demo;
 use crate::fb::Framebuffer;
@@ -470,6 +471,9 @@ pub struct Game {
     pub god: bool,
     /// Cheat: ammo never decrements (the 9 key).
     pub infinite_ammo: bool,
+    /// In-game autopilot (`I` key): finishes the current floor. Not an original
+    /// Wolf feature — test / convenience only.
+    autopilot: Option<Autopilot>,
 
     /// BJ status-bar glance frame 0..=2 (WL_AGENT.C `gamestate.faceframe`).
     pub faceframe: u8,
@@ -604,6 +608,7 @@ impl Game {
             spear_angle: 0.0,
             god: false,
             infinite_ammo: false,
+            autopilot: None,
             faceframe: 1, // B / center look (DrawFace default before first glance)
             facecount: 0.0,
             got_gatling_face: false,
@@ -726,10 +731,25 @@ impl Game {
             GameScreen::Playing => {
                 if input.menu_back {
                     // Esc pauses to the main menu (WL_PLAY.C's US_ControlPanel).
+                    self.stop_autopilot();
                     self.screen = GameScreen::MainMenu;
                     return;
                 }
-                self.update_play(dt, input);
+                // Autopilot overrides player input while active. Take it out of
+                // `self` so `tick` can read the rest of the game immutably.
+                if let Some(mut pilot) = self.autopilot.take() {
+                    let pilot_input = pilot.tick(self);
+                    self.update_play(dt, &pilot_input);
+                    if pilot.done() || self.screen != GameScreen::Playing {
+                        if self.screen == GameScreen::Playing {
+                            pilot.disengage(self);
+                        }
+                    } else {
+                        self.autopilot = Some(pilot);
+                    }
+                } else {
+                    self.update_play(dt, input);
+                }
             }
             GameScreen::Intermission => self.update_intermission(dt, input),
             GameScreen::GetPsyched => self.update_get_psyched(dt),
@@ -1466,13 +1486,16 @@ impl Game {
     // --- Change View (WL_MENU.C CP_ChangeView) -----------------------------
 
     /// Left/right resize the 3D viewport in 16px steps (CP_ChangeView units
-    /// 4..=19 → 64..=304). A 320-wide default is kept when loaded from config
-    /// but the menu will not step past unit 19 (original clamp). Esc/Enter
-    /// returns to the main menu with a live-previewed world.
+    /// 4..=19 → 64..=304). A 320-wide (unit 20) full-screen default is kept
+    /// when loaded from config; the first Left from unit 20 lands on 19, and
+    /// the menu will not step past unit 19 (original `newview>19` clamp) so
+    /// unit 20 is not re-reachable after shrinking. Esc/Enter returns to the
+    /// main menu with a live-previewed world.
     fn update_change_view(&mut self, input: &Input) {
         use crate::config::MAX_VIEW_UNIT;
         let unit = (self.view_size / VIEW_STEP).max(4);
         if input.menu_left && unit > 4 {
+            // From full (unit 20) this steps to 19 (304px), matching original.
             self.view_size = (unit - 1) * VIEW_STEP;
             self.sounds.push(snd::HITWALLSND as u8);
         }
@@ -1812,6 +1835,38 @@ impl Game {
         self.epi_tr_sum = 0;
         self.epi_time_sum = 0;
         self.epi_count = 0;
+    }
+
+    /// True while the `I`-key autopilot is driving the player.
+    pub fn autopilot_active(&self) -> bool {
+        self.autopilot.is_some()
+    }
+
+    /// Toggle the floor-finishing autopilot. Returns true when it is now on.
+    pub fn toggle_autopilot(&mut self) -> bool {
+        if self.autopilot.is_some() {
+            self.stop_autopilot();
+            return false;
+        }
+        if self.screen != GameScreen::Playing {
+            return false;
+        }
+        let Some(ap) = Autopilot::start(self) else {
+            return false;
+        };
+        ap.engage(self);
+        self.autopilot = Some(ap);
+        true
+    }
+
+    fn stop_autopilot(&mut self) {
+        if let Some(ap) = self.autopilot.take() {
+            // Only restore loadout if we are still on the same floor of play;
+            // after an elevator/boss finish the intermission owns the screen.
+            if self.screen == GameScreen::Playing {
+                ap.disengage(self);
+            }
+        }
     }
 
     fn update_play(&mut self, dt: f32, input: &Input) {

@@ -3,6 +3,7 @@
 
 pub mod actors;
 pub mod assets;
+pub mod autopilot;
 pub mod config;
 pub mod demo;
 pub mod demorec;

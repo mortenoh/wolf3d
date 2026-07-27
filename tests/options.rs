@@ -86,3 +86,136 @@ fn small_view_keeps_hud_and_draws_border() {
         "the shrunken view must paint the grey border in the play area"
     );
 }
+
+/// DrawChangeView paints VIEWCOLOR only on the status strip (y 160..200) and
+/// the original STR_SIZE1/2/3 lines; the live 3D play area is left alone.
+#[test]
+fn change_view_strip_is_teal_with_size_text() {
+    use wolf3d::assets::palette::PALETTE;
+    use wolf3d::game::{Game, GameScreen};
+    use wolf3d::hud::VIEW_H;
+
+    let mut game = Game::new(0);
+    // Reference: plain play render of the same spot (full HUD, no teal strip).
+    let mut fb_play = Framebuffer::new();
+    game.render(&mut fb_play);
+
+    game.screen = GameScreen::ChangeView;
+    game.view_size = MAX_VIEW;
+    let mut fb = Framebuffer::new();
+    game.render(&mut fb);
+
+    let teal = PALETTE[127];
+    // Status strip must be VIEWCOLOR (with text ink on top).
+    let mut teal_count = 0usize;
+    let mut other = 0usize;
+    for y in VIEW_H..HEIGHT {
+        for x in 0..WIDTH {
+            let p = fb.pixels[y * WIDTH + x];
+            if p == teal {
+                teal_count += 1;
+            } else {
+                other += 1;
+            }
+        }
+    }
+    assert!(
+        teal_count > (WIDTH * 40) / 2,
+        "most of the 40-row strip should be VIEWCOLOR teal, got {teal_count} teal / {other} other"
+    );
+    assert!(other > 50, "STR_SIZE text should put ink on the strip");
+
+    // VIEWCOLOR bar is status-only: play rows must match a normal world render
+    // (ChangeView draws the same 3D then overpaints only y>=160).
+    assert_eq!(
+        &fb.pixels[..VIEW_H * WIDTH],
+        &fb_play.pixels[..VIEW_H * WIDTH],
+        "ChangeView must not wipe the 3D play area with VIEWCOLOR"
+    );
+    // And the strip must differ from the normal HUD.
+    assert_ne!(
+        &fb.pixels[VIEW_H * WIDTH..],
+        &fb_play.pixels[VIEW_H * WIDTH..],
+        "ChangeView must replace the HUD with the teal instruction strip"
+    );
+
+    // Three STR_SIZE lines fit inside the strip (font 0 h=10, PrintY=161 →
+    // last ink row 190). Rows 191..199 are pure teal.
+    let bottom_rows_clear =
+        (191..HEIGHT).all(|y| (0..WIDTH).all(|x| fb.pixels[y * WIDTH + x] == teal));
+    assert!(
+        bottom_rows_clear,
+        "STR_SIZE lines must not overflow past y=190 into the bottom of the strip"
+    );
+}
+
+/// Unit 20 (full 320) is the config default; menu steps only reach unit 19.
+#[test]
+fn change_view_steps_cap_at_unit_19() {
+    use wolf3d::config::MAX_VIEW_UNIT;
+    use wolf3d::game::{Game, GameScreen, Input};
+
+    let mut game = Game::new(0);
+    game.screen = GameScreen::ChangeView;
+    game.view_size = MAX_VIEW; // unit 20
+    assert_eq!(game.view_size / 16, 20);
+
+    // Left from full → unit 19 (304).
+    game.update(
+        1.0 / 70.0,
+        &Input {
+            menu_left: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(game.view_size, MAX_VIEW_UNIT * 16);
+    assert_eq!(game.view_size / 16, 19);
+
+    // Right at unit 19 is a no-op (cannot recover unit 20 via the menu).
+    game.update(
+        1.0 / 70.0,
+        &Input {
+            menu_right: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(game.view_size / 16, 19);
+}
+
+/// Headless snapshot dump for visual review (ignored; run with --ignored).
+#[test]
+#[ignore]
+fn generate_changeview_snaps() {
+    use std::io::Write;
+    use std::path::Path;
+    use wolf3d::game::{Game, GameScreen};
+
+    let out = std::env::var("WOLF3D_SNAP_DIR").unwrap_or_else(|_| "snaps/parity".into());
+    std::fs::create_dir_all(&out).expect("snap dir");
+    let mut fb = Framebuffer::new();
+    let write_ppm = |fb: &Framebuffer, path: &Path| {
+        let mut f = std::io::BufWriter::new(std::fs::File::create(path).expect("create ppm"));
+        write!(f, "P6\n{WIDTH} {HEIGHT}\n255\n").unwrap();
+        for &px in &fb.pixels {
+            f.write_all(&px.to_le_bytes()[..3]).unwrap();
+        }
+    };
+    let mut snap = |game: &mut Game, name: &str| {
+        game.render(&mut fb);
+        let path = Path::new(&out).join(format!("{name}.ppm"));
+        write_ppm(&fb, &path);
+        eprintln!("wrote {}", path.display());
+    };
+
+    let mut g = Game::new(0);
+    g.screen = GameScreen::ChangeView;
+
+    g.view_size = MAX_VIEW;
+    snap(&mut g, "changeview_full");
+
+    g.view_size = 256; // unit 16
+    snap(&mut g, "changeview_small");
+
+    g.view_size = MIN_VIEW; // unit 4
+    snap(&mut g, "changeview_min");
+}

@@ -29,7 +29,8 @@ SNAP_DIR   ?= snaps
 
 .DEFAULT_GOAL := help
 
-.PHONY: help run run-sod run-sod-m2 run-sod-m3 record demo build build-release \
+.PHONY: help run run-sod run-sod-m2 run-sod-m3 record demo gen-demos \
+        build build-release \
         check fmt fmt-check clippy test test-compile ci data data-sod \
         data-sod-m2 data-sod-m3 data-all clean clean-data clean-saves \
         clean-snaps distclean
@@ -60,6 +61,9 @@ record: data ## Record the next play session as an attract demo (OUT=path)
 demo: data ## Run a headless input script (SCRIPT='w:1;use;snap:door')
 	@test -n "$(SCRIPT)" || { echo "SCRIPT is required, e.g. make demo SCRIPT='w:1;use;snap:door'"; exit 1; }
 	WOLF3D_DEMO="$(SCRIPT)" WOLF3D_SNAP_DIR=$(SNAP_DIR) $(CARGO) run --release
+
+gen-demos: data ## Generate attract demos that complete every WL6 floor (demos/eXmY.dm)
+	$(CARGO) run --release --bin gen_level_demos
 
 ##@ Develop
 
