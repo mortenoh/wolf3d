@@ -1,13 +1,16 @@
 //! Fidelity checks for original-game behavior: score extralives
 //! (GivePoints / EXTRAPOINTS), bestweapon tracking, per-floor ceiling colours,
-//! and SOD spectre rematerialisation (A_Dormant).
+//! SOD spectre rematerialisation (A_Dormant), and the death FizzleFade.
 
 use wolf3d::actors::Kind;
 use wolf3d::assets::{MapSet, data_dir};
+use wolf3d::fb::{Framebuffer, WIDTH};
+use wolf3d::fizzle::{self, Fizzle};
 use wolf3d::game::{
-    Difficulty, EXTRAPOINTS, Game, Input, WEAPON_CHAINGUN, WEAPON_KNIFE, WEAPON_MACHINEGUN,
-    WEAPON_PISTOL,
+    Difficulty, EXTRAPOINTS, Game, GameScreen, Input, WEAPON_CHAINGUN, WEAPON_KNIFE,
+    WEAPON_MACHINEGUN, WEAPON_PISTOL,
 };
+use wolf3d::hud::VIEW_H;
 use wolf3d::raycast::{self, Bonus, World};
 use wolf3d::variant::Variant;
 
@@ -263,4 +266,119 @@ fn sod_spectre_rematerialises() {
         }
     }
     assert!(woke, "spectre should rematerialise via A_Dormant");
+}
+
+/// Count view-area pixels that match the death-red palette index 4 colour.
+fn count_death_red(fb: &Framebuffer, vw: usize, vh: usize) -> usize {
+    let red = fizzle::death_red();
+    let mut n = 0;
+    for y in 0..vh.min(VIEW_H) {
+        for x in 0..vw.min(WIDTH) {
+            if fb.pixels[y * WIDTH + x] == red {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// Dying starts a FizzleFade over the 3D view; after the dissolve + hold the
+/// floor restarts with a fresh loadout (WL_GAME.C `Died`).
+#[test]
+fn death_fizzle_dissolves_view_then_respawns() {
+    let mut game = Game::new(0);
+    game.god = true; // only we control the lethal hit
+    game.lives = 2;
+    let lives_before = game.lives;
+
+    // Force the Died path.
+    game.god = false;
+    game.health = 0;
+    game.update(DT, &Input::default());
+    assert_eq!(game.screen, GameScreen::Death);
+    assert!(game.died);
+    assert_eq!(game.lives, lives_before - 1);
+
+    let (vx, vy, vw, vh) = game.view_rect();
+    assert_eq!((vx, vy), (0, 0));
+    assert_eq!((vw, vh), (WIDTH, VIEW_H));
+
+    // Early in the dissolve: some, but not all, view pixels are red.
+    for _ in 0..20 {
+        game.update(DT, &Input::default());
+    }
+    assert_eq!(game.screen, GameScreen::Death);
+    let mut fb = Framebuffer::new();
+    game.render(&mut fb);
+    let mid = count_death_red(&fb, vw, vh);
+    assert!(mid > 0, "fizzle should have painted some red pixels");
+    assert!(
+        mid < vw * vh,
+        "fizzle should not have finished after 20 tics (painted {mid}/{})",
+        vw * vh
+    );
+    // The dissolve only targets the 3D view; the status bar keeps its own art
+    // (which may contain palette-red texels, so we only assert the fizzle size).
+    assert_eq!(vh, VIEW_H);
+
+    // Drive through the full LFSR period + the 100-tic solid-red hold.
+    let max_tics = 131_071 / fizzle::FIZZLE_PIX_PER_FRAME + 100 + 20;
+    let mut finished = false;
+    for _ in 0..max_tics {
+        game.update(DT, &Input::default());
+        if game.screen == GameScreen::Playing {
+            finished = true;
+            break;
+        }
+    }
+    assert!(finished, "death screen should end after fizzle + hold");
+    assert_eq!(game.health, 100);
+    assert_eq!(game.ammo, 8);
+    assert_eq!(game.weapon, WEAPON_PISTOL);
+    assert_eq!(game.lives, lives_before - 1);
+}
+
+/// Out of lives: after the fizzle + hold, route to the high-score check.
+#[test]
+fn death_fizzle_game_over_leaves_play() {
+    let mut game = Game::new(0);
+    game.lives = 0;
+    game.health = 0;
+    game.update(DT, &Input::default());
+    assert_eq!(game.screen, GameScreen::Death);
+    assert!(game.lives < 0);
+
+    let max_tics = 131_071 / fizzle::FIZZLE_PIX_PER_FRAME + 100 + 20;
+    for _ in 0..max_tics {
+        game.update(DT, &Input::default());
+        if game.screen != GameScreen::Death {
+            break;
+        }
+    }
+    assert_ne!(
+        game.screen,
+        GameScreen::Death,
+        "game-over death must leave the Death screen"
+    );
+    assert_ne!(
+        game.screen,
+        GameScreen::Playing,
+        "out of lives must not restart the floor"
+    );
+}
+
+/// The 17-bit LFSR covers every pixel of a classic 320x160 view (unit-level
+/// check of the generator used by Died).
+#[test]
+fn fizzle_lfsr_covers_view() {
+    let mut f = Fizzle::new(WIDTH, VIEW_H);
+    f.step_n(131_071);
+    assert!(f.finished());
+    for y in 0..VIEW_H {
+        for x in 0..WIDTH {
+            assert!(f.is_painted(x, y), "missing fizzle pixel {x},{y}");
+        }
+    }
+    assert_eq!(fizzle::FIZZLE_PIX_PER_FRAME, 914);
+    assert_eq!(fizzle::death_red(), wolf3d::assets::palette::PALETTE[4]);
 }

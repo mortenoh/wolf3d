@@ -7,6 +7,7 @@ pub mod config;
 pub mod demo;
 pub mod demorec;
 pub mod fb;
+pub mod fizzle;
 pub mod font;
 pub mod game;
 pub mod highscore;

@@ -7,6 +7,7 @@ use crate::assets::{self, MapSet, VSwap, VgaGraph};
 use crate::config::{self, Config, MAX_MOUSE_SENS, MAX_VIEW, MIN_VIEW, VIEW_STEP};
 use crate::demorec::Demo;
 use crate::fb::Framebuffer;
+use crate::fizzle::Fizzle;
 use crate::highscore::{self, HighScore};
 use crate::hud::{self, Hud, HudState, KEY_GOLD, KEY_SILVER, VIEW_H};
 use crate::inter::{self, InterGfx, Intermission, LevelStats, VictoryStats};
@@ -102,8 +103,8 @@ pub enum GameScreen {
     Intermission,
     /// The brief "Get Psyched!" load screen shown while the next floor loads.
     GetPsyched,
-    /// The brief red-tint death pause (WL_GAME.C `Died`): shown for ~1s after
-    /// the player is killed, before the floor restarts or the game ends.
+    /// The death fizzle (WL_GAME.C `Died` / ID_VH.C `FizzleFade` to red),
+    /// then a short solid-red hold, before the floor restarts or the game ends.
     Death,
     /// The cinematic deathcam (WL_ACT2.C `A_StartDeathCam`): after an episode
     /// end boss dies the camera swings round to watch the corpse fall again.
@@ -179,8 +180,9 @@ pub const EXTRAPOINTS: i32 = 40000;
 /// already-loaded floor starts. Loads are instant here, so this is purely cosmetic.
 const LOAD_SCREEN_SECS: f32 = 0.5;
 
-/// How long the red death-tint lingers before the floor restarts / game ends.
-const DEATH_SECS: f32 = 1.0;
+/// After the fizzle finishes, `Died` waits on `IN_UserInput(100)` (~100 tics)
+/// of solid red before the floor restarts / game ends.
+const DEATH_HOLD_SECS: f32 = 100.0 / 70.0;
 
 /// Deathcam duration (WL_ACT2.C `IN_UserInput(300)`): ~300 tics before it auto-
 /// advances to the victory screen (any key skips it).
@@ -321,8 +323,11 @@ pub struct Game {
     psyched_clock: f32,
 
     // --- Endgame flow (deathcam / victory / endtext / high scores) ----------
-    /// Clock on the `Death` red-tint screen.
-    death_clock: f32,
+    /// In-flight FizzleFade over the 3D view (palette index 4), while on
+    /// `GameScreen::Death`.
+    death_fizzle: Option<Fizzle>,
+    /// Time spent on solid red after the fizzle completes (`IN_UserInput(100)`).
+    death_hold: f32,
     /// True when the death that started the `Death` screen was the last life,
     /// so it routes to the high-score check rather than a floor restart.
     death_game_over: bool,
@@ -510,7 +515,8 @@ impl Game {
             inter: None,
             show_load_screen: false,
             psyched_clock: 0.0,
-            death_clock: 0.0,
+            death_fizzle: None,
+            death_hold: 0.0,
             death_game_over: false,
             deathcam_clock: 0.0,
             victory_stats: VictoryStats::default(),
@@ -1067,10 +1073,20 @@ impl Game {
     }
 
     fn update_death(&mut self, dt: f32) {
-        self.death_clock += dt;
-        if self.death_clock < DEATH_SECS {
+        // Advance the per-pixel dissolve (ID_VH.C FizzleFade, 914 samples/tic).
+        if let Some(fz) = self.death_fizzle.as_mut() {
+            fz.advance(dt, TIC);
+            if !fz.finished() {
+                return;
+            }
+        }
+        // Solid red hold (IN_UserInput(100)) after the dissolve completes.
+        self.death_hold += dt;
+        if self.death_hold < DEATH_HOLD_SECS {
             return;
         }
+        self.death_fizzle = None;
+        self.death_hold = 0.0;
         if self.death_game_over {
             // Out of lives: game over -> high-score check -> title.
             self.begin_high_score_check(HsReturn::Title);
@@ -1838,13 +1854,16 @@ impl Game {
             self.died = true;
             self.sounds.push(snd::PLAYERDEATHSND as u8);
             self.lives -= 1;
-            // A red-tint pause (WL_GAME.C `Died`), then a floor restart — or,
-            // out of lives, the game-over -> high-score -> title path.
+            // FizzleFade the view to red (WL_GAME.C `Died`), then a floor
+            // restart — or, out of lives, the game-over -> high-score -> title
+            // path.
             self.death_game_over = self.lives < 0;
             if self.death_game_over {
                 self.sounds.push(snd::GAMEOVERSND as u8);
             }
-            self.death_clock = 0.0;
+            let (_, _, vw, vh) = self.view_rect();
+            self.death_fizzle = Some(Fizzle::new(vw, vh));
+            self.death_hold = 0.0;
             self.screen = GameScreen::Death;
         }
     }
@@ -2166,10 +2185,13 @@ impl Game {
                 return;
             }
             GameScreen::Death => {
-                // The frozen fight view with a deepening red death tint.
+                // Frozen fight view with the progressive FizzleFade to red over
+                // the 3D view only (status bar stays intact, as in Died).
                 self.render_world(fb);
-                let t = (self.death_clock / DEATH_SECS).clamp(0.0, 1.0);
-                red_tint(fb, 0.3 + 0.5 * t);
+                if let Some(fz) = &self.death_fizzle {
+                    let (vx, vy, _, _) = self.view_rect();
+                    fz.blit_red(fb, vx, vy);
+                }
                 return;
             }
             GameScreen::DeathCam => {
@@ -2279,21 +2301,5 @@ impl Game {
                 keys: self.keys,
             },
         );
-    }
-}
-
-/// Blend the whole framebuffer toward red by `amount` (0..1), the death fizzle
-/// (a cheap stand-in for WL_GAME.C's per-pixel `FizzleFade` to red).
-fn red_tint(fb: &mut Framebuffer, amount: f32) {
-    let a = amount.clamp(0.0, 1.0);
-    for px in fb.pixels.iter_mut() {
-        let r = (*px & 0xFF) as f32;
-        let g = ((*px >> 8) & 0xFF) as f32;
-        let b = ((*px >> 16) & 0xFF) as f32;
-        // Target pure red (0xAA,0,0)-ish.
-        let nr = (r + (170.0 - r) * a) as u32;
-        let ng = (g * (1.0 - a)) as u32;
-        let nb = (b * (1.0 - a)) as u32;
-        *px = 0xFF00_0000 | (nb << 16) | (ng << 8) | nr;
     }
 }
