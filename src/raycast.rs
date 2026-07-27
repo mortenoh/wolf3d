@@ -82,13 +82,18 @@ fn tile(level: &Level, x: i32, y: i32) -> u16 {
 }
 
 // =============================================================================
-// DOORS
+// DOORS + AREA CONNECTIVITY (WL_ACT1.C)
 // =============================================================================
 
 const DOOR_OPEN_TIME: f32 = 0.9; // seconds edge-to-edge, ~64 tics at 70Hz
 const DOOR_HOLD_TIME: f32 = 4.3; // ~300 tics before auto-close
 /// A door must be nearly fully open before you can walk through.
 const DOOR_PASSABLE: f32 = 0.9;
+
+/// First plane-0 floor tile that encodes an area id (`AREATILE` in WL_DEF.H).
+pub const AREATILE: u16 = 107;
+/// Number of distinct floor areas (`NUMAREAS` in WL_DEF.H).
+pub const NUMAREAS: usize = 37;
 
 #[derive(PartialEq, Clone, Copy)]
 enum DoorState {
@@ -111,6 +116,31 @@ pub struct Door {
     /// Open fraction: 0 = closed, 1 = fully slid into the wall.
     pub position: f32,
     state: DoorState,
+    /// Floor areas on either side of this door (WL_ACT1.C DoorOpening).
+    area1: u8,
+    area2: u8,
+    /// True while this door contributes to `areaconnect` (open or mid-slide).
+    areas_linked: bool,
+}
+
+/// Floor area id of a plane-0 tile, or `None` if it is not a floor area.
+#[inline]
+fn plane_area(t: u16) -> Option<u8> {
+    if t >= AREATILE {
+        let a = (t - AREATILE) as usize;
+        if a < NUMAREAS {
+            return Some(a as u8);
+        }
+    }
+    None
+}
+
+/// Area id of the floor tile at (x, y), or 0 if out of bounds / non-floor.
+fn floor_area_at(level: &Level, x: i32, y: i32) -> u8 {
+    if x < 0 || y < 0 || x >= MAP_SIZE as i32 || y >= MAP_SIZE as i32 {
+        return 0;
+    }
+    plane_area(level.plane0[y as usize * MAP_SIZE + x as usize]).unwrap_or(0)
 }
 
 impl Door {
@@ -406,6 +436,11 @@ pub struct World {
     plane0_orig: Vec<u16>,
     /// Sound-enum ids emitted by door activity this tic; drained by the game.
     pub sounds: Vec<u8>,
+    /// `areaconnect[a][b]`: count of open doors linking areas a and b
+    /// (WL_ACT1.C). Symmetric.
+    area_connect: [[u8; NUMAREAS]; NUMAREAS],
+    /// `areabyplayer[a]`: area a is reachable from the player through open doors.
+    area_by_player: [bool; NUMAREAS],
 }
 
 impl World {
@@ -449,14 +484,32 @@ impl World {
                     98 | 99 => (6, 8),
                     _ => (4, 0), // 100/101 elevator
                 };
+                let x = (i % MAP_SIZE) as i32;
+                let y = (i / MAP_SIZE) as i32;
+                let vertical = t % 2 == 0;
+                // Areas on either side of the door (DoorOpening reads neighbors).
+                let (a1, a2) = if vertical {
+                    (
+                        floor_area_at(&level, x + 1, y),
+                        floor_area_at(&level, x - 1, y),
+                    )
+                } else {
+                    (
+                        floor_area_at(&level, x, y - 1),
+                        floor_area_at(&level, x, y + 1),
+                    )
+                };
                 doors.push(Door {
-                    x: (i % MAP_SIZE) as i32,
-                    y: (i / MAP_SIZE) as i32,
-                    vertical: t % 2 == 0,
+                    x,
+                    y,
+                    vertical,
                     tex_base,
                     lock,
                     position: 0.0,
                     state: DoorState::Closed,
+                    area1: a1,
+                    area2: a2,
+                    areas_linked: false,
                 });
             }
         }
@@ -473,6 +526,8 @@ impl World {
             pushwall: None,
             plane0_orig,
             sounds: Vec::new(),
+            area_connect: [[0; NUMAREAS]; NUMAREAS],
+            area_by_player: [false; NUMAREAS],
         }
     }
 
@@ -565,6 +620,9 @@ impl World {
             if let Some(d) = self.doors.get_mut(i) {
                 d.position = position;
                 d.state = state;
+                // Re-link on next refresh_areas (areas_linked starts false after
+                // SpawnDoor; open doors reconnect via sync_door_areas).
+                d.areas_linked = false;
             }
         }
         let nstatics = r.get_u32()? as usize;
@@ -665,7 +723,7 @@ impl World {
         (idx != 0).then(|| &self.doors[idx as usize - 1])
     }
 
-    /// Advance door and push-wall animations.
+    /// Advance door and push-wall animations, then refresh area connectivity.
     pub fn tick(&mut self, dt: f32, p: &Player) {
         let (px, py) = (p.x.floor() as i32, p.y.floor() as i32);
         for d in &mut self.doors {
@@ -674,6 +732,86 @@ impl World {
             }
         }
         self.tick_pushwall(dt / crate::game::TIC);
+        self.refresh_areas(px, py);
+    }
+
+    /// Sync open-door area links and recompute `areabyplayer` from the player's
+    /// current tile (WL_ACT1.C ConnectAreas). Safe to call after use_door in the
+    /// same frame the player opens a door (tick may already have run).
+    pub fn refresh_areas(&mut self, ptx: i32, pty: i32) {
+        self.sync_door_areas();
+        self.connect_areas(ptx, pty);
+    }
+
+    /// Link/unlink areas for doors whose open state changed (DoorOpening
+    /// connects on the first non-zero open; DoorClosing disconnects when fully
+    /// closed — we treat any non-Closed state as linked).
+    fn sync_door_areas(&mut self) {
+        for i in 0..self.doors.len() {
+            let should_link = self.doors[i].state != DoorState::Closed;
+            let linked = self.doors[i].areas_linked;
+            if should_link == linked {
+                continue;
+            }
+            let a1 = self.doors[i].area1 as usize;
+            let a2 = self.doors[i].area2 as usize;
+            if a1 >= NUMAREAS || a2 >= NUMAREAS {
+                self.doors[i].areas_linked = should_link;
+                continue;
+            }
+            if should_link {
+                self.area_connect[a1][a2] = self.area_connect[a1][a2].saturating_add(1);
+                self.area_connect[a2][a1] = self.area_connect[a2][a1].saturating_add(1);
+            } else {
+                self.area_connect[a1][a2] = self.area_connect[a1][a2].saturating_sub(1);
+                self.area_connect[a2][a1] = self.area_connect[a2][a1].saturating_sub(1);
+            }
+            self.doors[i].areas_linked = should_link;
+        }
+    }
+
+    /// ConnectAreas: flood from the player's area through `areaconnect`.
+    fn connect_areas(&mut self, ptx: i32, pty: i32) {
+        self.area_by_player = [false; NUMAREAS];
+        let start = self.area_at(ptx, pty);
+        if start >= NUMAREAS {
+            return;
+        }
+        self.area_by_player[start] = true;
+        // RecursiveConnect as an explicit stack.
+        let mut stack = vec![start];
+        while let Some(a) = stack.pop() {
+            for b in 0..NUMAREAS {
+                if self.area_connect[a][b] > 0 && !self.area_by_player[b] {
+                    self.area_by_player[b] = true;
+                    stack.push(b);
+                }
+            }
+        }
+    }
+
+    /// Floor area id of tile (x, y) — door tiles use `area1` of that door.
+    pub fn area_at(&self, x: i32, y: i32) -> usize {
+        if x < 0 || y < 0 || x >= MAP_SIZE as i32 || y >= MAP_SIZE as i32 {
+            return 0;
+        }
+        if let Some(d) = self.door_at(x, y) {
+            return d.area1 as usize;
+        }
+        let t = self.level.plane0[y as usize * MAP_SIZE + x as usize];
+        plane_area(t).unwrap_or(0) as usize
+    }
+
+    /// True when the tile's area is in the player's connected-area set
+    /// (`areabyplayer[areanumber]`).
+    pub fn in_player_area(&self, x: i32, y: i32) -> bool {
+        let a = self.area_at(x, y);
+        a < NUMAREAS && self.area_by_player[a]
+    }
+
+    /// Snapshot of `areabyplayer` (for tests).
+    pub fn area_by_player(&self) -> [bool; NUMAREAS] {
+        self.area_by_player
     }
 
     /// MovePWalls (WL_ACT1.C): advance the active push-wall by `tics`. When

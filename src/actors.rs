@@ -9,9 +9,6 @@
 //! whole simulation stays frame-rate independent and reproduces headlessly.
 //!
 //! Deliberate simplifications vs. the original:
-//! - Area connectivity (`areabyplayer`) is approximated by a BFS flood from the
-//!   player's tile that passes through doors once they are >30% open, instead of
-//!   the map's precomputed area/door adjacency tables.
 //! - Line of sight / `CheckLine` samples the segment on a fine grid rather than
 //!   the original fixed-point DDA; walls are full tiles so this is equivalent in
 //!   practice. A door blocks sight until it is ~40% open.
@@ -25,6 +22,10 @@
 //!   high frame rates fireballs crawl; at low frame rates they run full speed.
 //!   Continuous movement matches the low-frame-rate (intended) behavior.
 //! - Boss die2 states use the DigiMode-on 140-tic duration (the death yell).
+//!
+//! Area connectivity follows WL_ACT1.C: open doors link floor areas via
+//! `areaconnect`, and `areabyplayer` is recomputed from the player's area
+//! (doors connect on first open, disconnect only when fully closed).
 //!
 //! Implemented and tested against WOLFSRC: Pac-Man ghosts (E3M10), SOD spectres
 //! with A_Dormant rematerialisation, rocket smoke/boom frames, deathcam via a
@@ -47,9 +48,8 @@ const SPD_DOG: f32 = 1500.0;
 /// MINACTORDIST 0x10000 and MINSIGHT 0x18000, in tiles.
 const MIN_ACTOR_DIST: f32 = 1.0;
 const MIN_SIGHT: f32 = 1.5;
-/// A door must be at least this open to see / flood through it.
+/// A door must be at least this open to see through it (CheckLine stand-in).
 const DOOR_SEE: f32 = 0.4;
-const DOOR_FLOOD: f32 = 0.3;
 
 // Direction codes match WL_DEF.H `dirtype`.
 const EAST: u8 = 0;
@@ -1567,8 +1567,7 @@ pub struct Actors {
     vswap_shift: u16,
     table: StateTable,
     rnd: Rnd,
-    /// Scratch flood-fill grid: tiles reachable from the player (areabyplayer).
-    reachable: Vec<bool>,
+
     /// Scratch actor-occupancy grid (blocking, live actors).
     occ: Vec<bool>,
     /// Damage dealt to the player this update (drained by the caller).
@@ -1882,7 +1881,6 @@ impl Actors {
             vswap_shift: sprite_shift,
             table,
             rnd: Rnd::new(),
-            reachable: vec![false; MAP_SIZE * MAP_SIZE],
             occ: vec![false; MAP_SIZE * MAP_SIZE],
             damage: 0,
             drops: Vec::new(),
@@ -2095,7 +2093,8 @@ impl Actors {
         self.damage = 0;
         let ptx = px.floor() as i32;
         let pty = py.floor() as i32;
-        self.compute_reachable(world, ptx, pty);
+        // Refresh areabyplayer (covers doors opened this frame after world.tick).
+        world.refresh_areas(ptx, pty);
         self.rebuild_occupancy();
 
         for i in 0..self.list.len() {
@@ -2219,45 +2218,10 @@ impl Actors {
         }
     }
 
-    /// Flood fill from the player's tile through non-wall tiles, crossing doors
-    /// only when they are open enough. Stands in for `areabyplayer`.
-    fn compute_reachable(&mut self, world: &World, ptx: i32, pty: i32) {
-        self.reachable.iter_mut().for_each(|b| *b = false);
-        if ptx < 0 || pty < 0 || ptx >= MAP_SIZE as i32 || pty >= MAP_SIZE as i32 {
-            return;
-        }
-        let mut stack = vec![(ptx, pty)];
-        self.reachable[pty as usize * MAP_SIZE + ptx as usize] = true;
-        while let Some((x, y)) = stack.pop() {
-            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                let (nx, ny) = (x + dx, y + dy);
-                if nx < 0 || ny < 0 || nx >= MAP_SIZE as i32 || ny >= MAP_SIZE as i32 {
-                    continue;
-                }
-                let idx = ny as usize * MAP_SIZE + nx as usize;
-                if self.reachable[idx] {
-                    continue;
-                }
-                if world.wall_at(nx, ny) {
-                    continue;
-                }
-                if world
-                    .door_lookup(nx, ny)
-                    .is_some_and(|d| world.door_position(d) < DOOR_FLOOD)
-                {
-                    continue;
-                }
-                self.reachable[idx] = true;
-                stack.push((nx, ny));
-            }
-        }
-    }
-
-    fn reachable_tile(&self, tx: i32, ty: i32) -> bool {
-        if tx < 0 || ty < 0 || tx >= MAP_SIZE as i32 || ty >= MAP_SIZE as i32 {
-            return false;
-        }
-        self.reachable[ty as usize * MAP_SIZE + tx as usize]
+    /// True when the actor's tile is in an area connected to the player
+    /// (`areabyplayer[areanumber]`).
+    fn reachable_tile(&self, world: &World, tx: i32, ty: i32) -> bool {
+        world.in_player_area(tx, ty)
     }
 
     // ---- DoActor state-machine driver (WL_PLAY.C) -------------------------
@@ -2383,7 +2347,7 @@ impl Actors {
             self.list[i].reaction = 0.0;
         } else {
             let a = &self.list[i];
-            if !self.reachable_tile(a.tilex, a.tiley) {
+            if !self.reachable_tile(world, a.tilex, a.tiley) {
                 return false;
             }
             if a.flags & FL_AMBUSH != 0 {
@@ -2412,7 +2376,7 @@ impl Actors {
 
     fn check_sight(&self, i: usize, world: &World, px: f32, py: f32) -> bool {
         let a = &self.list[i];
-        if !self.reachable_tile(a.tilex, a.tiley) {
+        if !self.reachable_tile(world, a.tilex, a.tiley) {
             return false;
         }
         let dpx = px - a.x;
@@ -2474,7 +2438,7 @@ impl Actors {
                 return;
             }
             if move_left < self.list[i].distance {
-                self.move_obj(i, move_left, tics, px, py);
+                self.move_obj(i, move_left, tics, px, py, world);
                 break;
             }
             move_left -= self.list[i].distance;
@@ -2573,7 +2537,7 @@ impl Actors {
                 return;
             }
             if move_left < self.list[i].distance {
-                self.move_obj(i, move_left, tics, px, py);
+                self.move_obj(i, move_left, tics, px, py, world);
                 break;
             }
             move_left -= self.list[i].distance;
@@ -2609,7 +2573,7 @@ impl Actors {
         let mut move_left = self.list[i].speed / TILE_GLOBAL * tics;
         while move_left > 0.0 {
             if move_left < self.list[i].distance {
-                self.move_obj(i, move_left, tics, px, py);
+                self.move_obj(i, move_left, tics, px, py, world);
                 break;
             }
             move_left -= self.list[i].distance;
@@ -2644,7 +2608,7 @@ impl Actors {
     /// player's personal space. `tics` is the frame's tic count, used for the
     /// ghost contact damage. Backing off only happens while the actor is in the
     /// player's area (WL_STATE.C MoveObj gates on `areabyplayer`).
-    fn move_obj(&mut self, i: usize, mv: f32, tics: f32, px: f32, py: f32) {
+    fn move_obj(&mut self, i: usize, mv: f32, tics: f32, px: f32, py: f32, world: &World) {
         let (dx, dy) = dir_delta(self.list[i].dir);
         self.list[i].x += dx as f32 * mv;
         self.list[i].y += dy as f32 * mv;
@@ -2652,7 +2616,7 @@ impl Actors {
             let a = &self.list[i];
             (a.tilex, a.tiley, a.x, a.y)
         };
-        if self.reachable_tile(tilex, tiley)
+        if self.reachable_tile(world, tilex, tiley)
             && (ax - px).abs() <= MIN_ACTOR_DIST
             && (ay - py).abs() <= MIN_ACTOR_DIST
         {
@@ -2928,7 +2892,7 @@ impl Actors {
         running: bool,
     ) {
         let a = &self.list[i];
-        if !self.reachable_tile(a.tilex, a.tiley) {
+        if !self.reachable_tile(world, a.tilex, a.tiley) {
             return;
         }
         if !check_line(world, a.x, a.y, px, py) {

@@ -1,7 +1,7 @@
 //! Fidelity checks for original-game behavior: score extralives
 //! (GivePoints / EXTRAPOINTS), bestweapon tracking, per-floor ceiling colours,
-//! SOD spectre rematerialisation (A_Dormant), the death FizzleFade, and BJ
-//! face glances (UpdateFace).
+//! SOD spectre rematerialisation (A_Dormant), the death FizzleFade, BJ face
+//! glances (UpdateFace), and area connectivity (`areabyplayer`).
 
 use wolf3d::actors::Kind;
 use wolf3d::assets::{MapSet, data_dir};
@@ -365,6 +365,85 @@ fn death_fizzle_game_over_leaves_play() {
         game.screen,
         GameScreen::Playing,
         "out of lives must not restart the floor"
+    );
+}
+
+/// Opening a door links the floor areas on either side immediately (WL_ACT1.C
+/// DoorOpening connects on the first open frame), and closing fully unlinks them.
+#[test]
+fn door_open_connects_areas_closed_disconnects() {
+    let mut game = Game::new(0);
+    game.god = true;
+    // E1M1 has a horizontal door at (34,28) between areas 3 (north) and 1 (south).
+    let door = game
+        .world
+        .doors
+        .iter()
+        .find(|d| d.x == 34 && d.y == 28)
+        .expect("E1M1 door at (34,28)");
+    assert!(!door.vertical);
+    let near = (34, 27); // area 3
+    let far = (34, 29); // area 1
+    let near_a = game.world.area_at(near.0, near.1);
+    let far_a = game.world.area_at(far.0, far.1);
+    assert_ne!(
+        near_a, far_a,
+        "door should separate two areas ({near_a} vs {far_a})"
+    );
+
+    // Stand north of the door, facing south.
+    game.player.x = near.0 as f32 + 0.5;
+    game.player.y = near.1 as f32 + 0.5;
+    game.player.angle = std::f32::consts::FRAC_PI_2; // face south
+    game.world.refresh_areas(near.0, near.1);
+    assert!(game.world.in_player_area(near.0, near.1));
+    assert!(
+        !game.world.in_player_area(far.0, far.1),
+        "far area must start disconnected with the door closed"
+    );
+
+    game.update(
+        DT,
+        &Input {
+            use_door: true,
+            ..Default::default()
+        },
+    );
+    // Areas connect the instant the door leaves Closed (not after a flood %).
+    assert!(
+        game.world.in_player_area(far.0, far.1),
+        "opening a door should connect the far area to the player"
+    );
+
+    // Wait out hold (~4.3s) + close (~0.9s).
+    for _ in 0..450 {
+        game.update(DT, &Input::default());
+    }
+    assert!(
+        game.world
+            .doors
+            .iter()
+            .find(|d| d.x == 34 && d.y == 28)
+            .is_some_and(|d| d.position == 0.0),
+        "test door should have auto-closed"
+    );
+    assert!(
+        !game.world.in_player_area(far.0, far.1),
+        "fully closed door should disconnect the far area again"
+    );
+}
+
+/// Tiles that share a floor area stay connected even with a closed door
+/// between them (the original keys AI off area ids, not geometric flood).
+#[test]
+fn same_area_stays_connected_through_closed_door() {
+    let mut game = Game::new(0);
+    // E1M1 first door (32,57): both sides are floor area 2.
+    game.world.refresh_areas(29, 57);
+    assert_eq!(game.world.area_at(31, 57), game.world.area_at(33, 57));
+    assert!(
+        game.world.in_player_area(33, 57),
+        "same-area tiles remain in areabyplayer with the door shut"
     );
 }
 
