@@ -246,64 +246,105 @@ pub const GUARD_DEATH_SCREAMS: [u8; 8] = [
 pub const CORNER_MUS: usize = 0;
 pub const DUNGEON_MUS: usize = 1;
 pub const WARMARCH_MUS: usize = 2;
-/// Played on the level-completed intermission (WL_INTER.C `ENDLEVEL_MUS`).
-pub const ENDLEVEL_MUS: usize = 5;
 pub const GETTHEM_MUS: usize = 3;
 pub const HEADACHE_MUS: usize = 4;
+/// HITLWLTZ_MUS is 5; intermission uses ENDLEVEL_MUS (16) below.
 pub const INTROCW3_MUS: usize = 6;
 pub const NAZI_OMI_MUS: usize = 8;
 pub const POW_MUS: usize = 9;
 pub const SEARCHN_MUS: usize = 11;
 pub const SUSPENSE_MUS: usize = 12;
 pub const WONDERIN_MUS: usize = 14;
+pub const FUNKYOU_MUS: usize = 15;
+/// Played on the level-completed intermission (WL_INTER.C / AUDIOWL6.H).
+pub const ENDLEVEL_MUS: usize = 16;
+pub const GOINGAFT_MUS: usize = 17;
+pub const PREGNANT_MUS: usize = 18;
 pub const ULTIMATE_MUS: usize = 19;
 pub const NAZI_RAP_MUS: usize = 20;
 pub const ZEROHOUR_MUS: usize = 21;
 pub const TWELFTH_MUS: usize = 22;
-pub const PREGNANT_MUS: usize = 18;
-pub const GOINGAFT_MUS: usize = 17;
 pub const PACMAN_MUS: usize = 26;
 
 /// Music played on the menus (WL_MENU.H `MENUSONG`).
 pub const MENU_SONG: usize = WONDERIN_MUS;
 
-/// The per-episode song sets from WL_MAIN.C `DoJukebox` (`songs[]`), which lists
-/// the six tracks each episode uses. The retail per-floor `songs[]` table lives
-/// in a WL_GAME.C function that the public id-Software source drop omits, so the
-/// floor within an episode indexes into its jukebox group here — E1 floor 1 is
-/// "Get Them", etc.
-const JUKEBOX: [[usize; 6]; 3] = [
-    [
-        GETTHEM_MUS,
-        SEARCHN_MUS,
-        POW_MUS,
-        SUSPENSE_MUS,
-        WARMARCH_MUS,
-        CORNER_MUS,
-    ],
-    [
-        NAZI_OMI_MUS,
-        PREGNANT_MUS,
-        GOINGAFT_MUS,
-        HEADACHE_MUS,
-        DUNGEON_MUS,
-        ULTIMATE_MUS,
-    ],
-    [
-        INTROCW3_MUS,
-        NAZI_RAP_MUS,
-        TWELFTH_MUS,
-        ZEROHOUR_MUS,
-        ULTIMATE_MUS,
-        PACMAN_MUS,
-    ],
+/// Per-floor music for registered WL6 (WOLFSRC/WL_PLAY.C `songs[]`, non-SPEAR).
+/// Indexed by `mapon + episode*10` (0..59). Each episode is 8 regular floors,
+/// then boss (index 8) and secret (index 9). Episodes 4–6 reuse E1–E3 themes
+/// except E6's secret floor uses `FUNKYOU_MUS` instead of `PACMAN_MUS`.
+const WL6_SONGS: [usize; 60] = [
+    // Episode One
+    GETTHEM_MUS,
+    SEARCHN_MUS,
+    POW_MUS,
+    SUSPENSE_MUS,
+    GETTHEM_MUS,
+    SEARCHN_MUS,
+    POW_MUS,
+    SUSPENSE_MUS,
+    WARMARCH_MUS,
+    CORNER_MUS,
+    // Episode Two
+    NAZI_OMI_MUS,
+    PREGNANT_MUS,
+    GOINGAFT_MUS,
+    HEADACHE_MUS,
+    NAZI_OMI_MUS,
+    PREGNANT_MUS,
+    HEADACHE_MUS,
+    GOINGAFT_MUS,
+    WARMARCH_MUS,
+    DUNGEON_MUS,
+    // Episode Three
+    INTROCW3_MUS,
+    NAZI_RAP_MUS,
+    TWELFTH_MUS,
+    ZEROHOUR_MUS,
+    INTROCW3_MUS,
+    NAZI_RAP_MUS,
+    TWELFTH_MUS,
+    ZEROHOUR_MUS,
+    ULTIMATE_MUS,
+    PACMAN_MUS,
+    // Episode Four
+    GETTHEM_MUS,
+    SEARCHN_MUS,
+    POW_MUS,
+    SUSPENSE_MUS,
+    GETTHEM_MUS,
+    SEARCHN_MUS,
+    POW_MUS,
+    SUSPENSE_MUS,
+    WARMARCH_MUS,
+    CORNER_MUS,
+    // Episode Five
+    NAZI_OMI_MUS,
+    PREGNANT_MUS,
+    GOINGAFT_MUS,
+    HEADACHE_MUS,
+    NAZI_OMI_MUS,
+    PREGNANT_MUS,
+    HEADACHE_MUS,
+    GOINGAFT_MUS,
+    WARMARCH_MUS,
+    DUNGEON_MUS,
+    // Episode Six
+    INTROCW3_MUS,
+    NAZI_RAP_MUS,
+    TWELFTH_MUS,
+    ZEROHOUR_MUS,
+    INTROCW3_MUS,
+    NAZI_RAP_MUS,
+    TWELFTH_MUS,
+    ZEROHOUR_MUS,
+    ULTIMATE_MUS,
+    FUNKYOU_MUS,
 ];
 
 /// The music track for an overall level index (episode*10 + floor).
 pub fn song_for_level(level_idx: usize) -> usize {
-    let episode = (level_idx / 10) % 3;
-    let floor = (level_idx % 10) % 6;
-    JUKEBOX[episode][floor]
+    WL6_SONGS.get(level_idx).copied().unwrap_or(GETTHEM_MUS)
 }
 
 // =============================================================================

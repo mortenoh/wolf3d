@@ -235,3 +235,27 @@ fn priority_rejects_lower_priority_sound() {
     let buf = sound::render_offline(&mut e, 0.3);
     assert!(buf.iter().any(|&s| s.abs() > 0.01));
 }
+
+/// WL_PLAY.C `songs[]` (registered WL6): boss floors use WARMARCH, secrets
+/// use CORNER/DUNGEON/PACMAN/FUNKYOU, and E1M1 is GETTHEM.
+#[test]
+fn wl6_floor_songs_match_retail_table() {
+    use sound::{
+        CORNER_MUS, DUNGEON_MUS, FUNKYOU_MUS, GETTHEM_MUS, PACMAN_MUS, POW_MUS, SEARCHN_MUS,
+        SUSPENSE_MUS, WARMARCH_MUS, song_for_level,
+    };
+    // Episode 1 floors 1-4, boss (9), secret (10) — 0-based indices 0..9.
+    assert_eq!(song_for_level(0), GETTHEM_MUS);
+    assert_eq!(song_for_level(1), SEARCHN_MUS);
+    assert_eq!(song_for_level(2), POW_MUS);
+    assert_eq!(song_for_level(3), SUSPENSE_MUS);
+    assert_eq!(song_for_level(8), WARMARCH_MUS);
+    assert_eq!(song_for_level(9), CORNER_MUS);
+    // E2 secret, E3 boss/secret, E6 secret.
+    assert_eq!(song_for_level(19), DUNGEON_MUS);
+    assert_eq!(song_for_level(28), sound::ULTIMATE_MUS);
+    assert_eq!(song_for_level(29), PACMAN_MUS);
+    assert_eq!(song_for_level(59), FUNKYOU_MUS);
+    // Intermission track is ENDLEVEL (16), not HITLWLTZ (5).
+    assert_eq!(sound::ENDLEVEL_MUS, 16);
+}

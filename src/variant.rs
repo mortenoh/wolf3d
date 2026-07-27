@@ -236,8 +236,8 @@ impl Variant {
         }
     }
 
-    /// The music track index for a floor (`mapon`, 0-based). WL6 defers to the
-    /// jukebox mapping in [`crate::sound::song_for_level`].
+    /// The music track index for a floor (`mapon` / overall level index).
+    /// WL6 uses WOLFSRC/WL_PLAY.C `songs[]`; SOD uses the SPEAR table above.
     pub fn song_for_level(&self, level_idx: usize) -> usize {
         match self.id {
             GameId::Wl6 => crate::sound::song_for_level(level_idx),
