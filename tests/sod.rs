@@ -156,8 +156,12 @@ fn sod_grabbing_the_spear_warps_to_the_angel_floor() {
     let mut game = sod_game(spear_floor);
     // Stand the player on the spear tile so the per-frame pickup test fires.
     let (tx, ty) = (pos % N, pos / N);
-    game.player.x = tx as f32 + 0.5;
-    game.player.y = ty as f32 + 0.5;
+    let spear_x = tx as f32 + 0.5;
+    let spear_y = ty as f32 + 0.5;
+    game.player.x = spear_x;
+    game.player.y = spear_y;
+    // Face west so spearangle is a known non-default.
+    game.player.angle = std::f32::consts::PI;
 
     game.update(DT, &Input::default());
 
@@ -173,6 +177,18 @@ fn sod_grabbing_the_spear_warps_to_the_angel_floor() {
         game.keys & wolf3d::hud::KEY_GOLD,
         wolf3d::hud::KEY_GOLD,
         "floor 20 always grants the gold key"
+    );
+    // WL_GAME.C restores spearx/speary/spearangle after SetupGameLevel.
+    assert!(
+        (game.player.x - spear_x).abs() < 1e-3 && (game.player.y - spear_y).abs() < 1e-3,
+        "player should land at spear pickup coords ({spear_x},{spear_y}), got ({},{})",
+        game.player.x,
+        game.player.y
+    );
+    assert!(
+        (game.player.angle - std::f32::consts::PI).abs() < 1e-3,
+        "player should keep spearangle, got {}",
+        game.player.angle
     );
     // The Angel is waiting on the floor we warped to.
     assert!(

@@ -453,6 +453,11 @@ pub struct Game {
     /// Set when the player grabs the Spear of Destiny (SOD): the next update
     /// warps them to the final Angel-of-Death floor (WL_GAME.C `spearflag`).
     pub spear_pending: bool,
+    /// Player pose at spear pickup (`spearx` / `speary` / `spearangle`); applied
+    /// after the Angel floor loads (WL_GAME.C GameLoop spearflag path).
+    spear_x: f32,
+    spear_y: f32,
+    spear_angle: f32,
     /// Debug-only god mode for headless demo scripts: the player takes no
     /// damage. Set via the demo `godmode` command or the 7 cheat key.
     pub god: bool,
@@ -587,6 +592,9 @@ impl Game {
             died: false,
             victory: false,
             spear_pending: false,
+            spear_x: 0.0,
+            spear_y: 0.0,
+            spear_angle: 0.0,
             god: false,
             infinite_ammo: false,
             faceframe: 1, // B / center look (DrawFace default before first glance)
@@ -1879,14 +1887,28 @@ impl Game {
         self.try_pickups();
 
         // SOD: grabbing the spear warps to the final Angel-of-Death floor
-        // (WL_GAME.C `spearflag`: mapon = 20, always granted the gold key). The
-        // original re-places the player at the pickup coordinates; we use the
-        // Angel floor's own player start, which is robust to map geometry.
+        // (WL_GAME.C `spearflag`: mapon = 20, always granted the gold key).
+        // The original re-places the player at spearx/speary/spearangle — the
+        // retail spear tile coincides with the Angel floor start, so this is
+        // walkable; if a custom map put the player in a wall we keep the start.
         if self.spear_pending {
             self.spear_pending = false;
+            let (sx, sy, sa) = (self.spear_x, self.spear_y, self.spear_angle);
             self.level_idx = 20.min(self.maps.num_levels() - 1);
             self.load_level();
             self.keys = KEY_GOLD;
+            let tx = sx.floor() as i32;
+            let ty = sy.floor() as i32;
+            if !self.world.wall_at(tx, ty)
+                && !self
+                    .world
+                    .door_lookup(tx, ty)
+                    .is_some_and(|d| !self.world.door_open_enough(d))
+            {
+                self.player.x = sx;
+                self.player.y = sy;
+                self.player.angle = sa;
+            }
             self.screen = GameScreen::Playing;
             return;
         }
@@ -2099,9 +2121,12 @@ impl Game {
             // SOD bonus box: +25 ammo (bo_25clip).
             Bonus::Clip25 => self.give_ammo(25),
             // SOD: grabbing the spear arms the warp to the Angel floor
-            // (WL_AGENT.C GetBonus bo_spear sets spearflag). Always taken.
+            // (WL_AGENT.C GetBonus bo_spear sets spearflag + spearx/y/angle).
             Bonus::Spear => {
                 self.spear_pending = true;
+                self.spear_x = self.player.x;
+                self.spear_y = self.player.y;
+                self.spear_angle = self.player.angle;
                 true
             }
         }
