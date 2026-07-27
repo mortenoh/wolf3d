@@ -763,7 +763,10 @@ impl Game {
         };
         self.demos = crate::demorec::load_all()
             .into_iter()
-            .filter(|d| d.variant == want)
+            // Legacy generator output may carry god mode or erase every
+            // actor. Keep those files available for explicit debugging, but
+            // never present them as normal attract-mode play.
+            .filter(|d| d.variant == want && !d.god && !d.clear_actors)
             .collect();
     }
 
