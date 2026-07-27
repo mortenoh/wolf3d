@@ -350,8 +350,10 @@ fn any_key_during_attract_screens_opens_menu() {
 }
 
 #[test]
-fn back_to_demo_menu_entry_returns_to_title() {
+fn back_to_demo_menu_entry_starts_demo_when_available() {
+    let (demo, _) = record_fight();
     let mut game = Game::new(0);
+    game.demos = vec![demo];
     game.screen = GameScreen::MainMenu;
     game.started = false;
     game.attract_mode = false;
@@ -360,6 +362,30 @@ fn back_to_demo_menu_entry_returns_to_title() {
         game.main_item_active(wolf3d::menu::ITEM_BACKTODEMO),
         "Back to Demo is wired up"
     );
+
+    game.update(
+        DT,
+        &Input {
+            menu_enter: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        game.screen,
+        GameScreen::Attract,
+        "Back to Demo should start attract playback immediately when demos exist"
+    );
+    assert!(game.attract_mode);
+}
+
+#[test]
+fn back_to_demo_menu_entry_returns_to_title_without_demos() {
+    let mut game = Game::new(0);
+    assert!(game.demos.is_empty());
+    game.screen = GameScreen::MainMenu;
+    game.started = false;
+    game.attract_mode = false;
+    game.main_sel = wolf3d::menu::ITEM_BACKTODEMO;
 
     game.update(
         DT,

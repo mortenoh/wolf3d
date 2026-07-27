@@ -657,13 +657,34 @@ impl Game {
     }
 
     /// Boot into the title screen and (re)start the attract loop (used at boot,
-    /// after a game over / victory, and by the "Back to Demo" menu entry).
+    /// after a game over / victory). The "Back to Demo" menu entry uses
+    /// [`Self::back_to_demo`] so a demo starts immediately when one is loaded.
     pub fn to_title(&mut self) {
         self.screen = GameScreen::Title;
         self.started = false;
         self.main_sel = 0;
         self.attract_mode = true;
         self.attract_clock = 0.0;
+    }
+
+    /// "Back to Demo" from the main menu (WL_MENU.C): leave the control panel
+    /// and resume the attract cycle. If any demos are loaded for this variant,
+    /// play the next one right away — waiting through title/credits/scores again
+    /// made the item look broken. With no demos (e.g. SOD with only WL6 demos
+    /// on disk), fall back to the title loop.
+    pub fn back_to_demo(&mut self) {
+        self.started = false;
+        self.main_sel = 0;
+        self.attract_mode = true;
+        self.attract_clock = 0.0;
+        self.god = false;
+        if self.demos.is_empty() {
+            self.screen = GameScreen::Title;
+            return;
+        }
+        let idx = self.attract_demo_idx % self.demos.len();
+        let demo = self.demos[idx].clone();
+        self.start_attract_demo(&demo);
     }
 
     /// Load the shipped attract demos from `demos/` (called once by the frontend
@@ -1369,8 +1390,8 @@ impl Game {
                     self.screen = GameScreen::Playing;
                 }
                 menu::ITEM_BACKTODEMO => {
-                    // "Back to Demo" — return to the title / attract loop.
-                    self.to_title();
+                    // "Back to Demo" — play the next attract demo immediately.
+                    self.back_to_demo();
                 }
                 menu::ITEM_QUIT => {
                     // CP_Quit: endStrings[(US_RndT()&7) + (US_RndT()&1)], which
