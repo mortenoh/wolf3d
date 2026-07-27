@@ -283,6 +283,24 @@ impl Menu {
         &self.cursor[if self.blink < 0.5 { 0 } else { 1 }]
     }
 
+    /// DrawGun (WL_MENU.C): place the gun cursor at (`x`, `y`).
+    ///
+    /// The cursor pics paint empty space as [`Colors::bkgd`] (the window fill),
+    /// not true transparency. The original first clears a 25x16 pad with that
+    /// color so the empty pixels vanish over the window; we also skip those
+    /// pixels when blitting so the gun sits cleanly when it straddles the
+    /// window edge onto the brighter border (Sound menu Off rows).
+    fn draw_gun(&self, fb: &mut Framebuffer, x: i32, y: i32) {
+        bar(fb, x - 1, y, 25, 16, self.colors.bkgd);
+        blit_masked(
+            fb,
+            self.cursor_frame(),
+            x,
+            y,
+            vgagraph_color(self.colors.bkgd),
+        );
+    }
+
     // --- Screens ----------------------------------------------------------
 
     /// The title screen: one full-screen pic (WL6), or the two stacked halves
@@ -349,7 +367,7 @@ impl Menu {
         // DrawGun: cursor at x = MENU_X & ~7, y = (MENU_Y - 2) + which*13.
         let cx = MENU_X & !7;
         let cy = MENU_Y - 2 + selected as i32 * ITEM_STEP;
-        blit(fb, self.cursor_frame(), cx, cy);
+        self.draw_gun(fb, cx, cy);
     }
 
     /// Episode select: the six C_EPISODE banners stacked, gun on `selected`.
@@ -370,7 +388,7 @@ impl Menu {
                 .draw(fb, tx, y + 1 + self.font.height() as i32, subtitle, color);
         }
         let cy = NE_Y + selected as i32 * 26 + 4;
-        blit(fb, self.cursor_frame(), NE_X, cy);
+        self.draw_gun(fb, NE_X, cy);
     }
 
     /// Difficulty select: the "How tough are you?" prompt over the selected
@@ -453,7 +471,7 @@ impl Menu {
         } else {
             SM_Y2 + (selected - 3) as i32 * ITEM_STEP
         };
-        blit(fb, self.cursor_frame(), SM_X & !7, cy);
+        self.draw_gun(fb, SM_X & !7, cy);
     }
 
     /// WL_MENU.C `Message`: a grey box of black text centered on screen, drawn
@@ -684,7 +702,7 @@ impl Menu {
         // The gun cursor sits in the window's left margin (hidden while typing).
         if !entering {
             let cy = LSM_Y - 2 + selected as i32 * ITEM_STEP;
-            blit(fb, self.cursor_frame(), LSM_X & !7, cy);
+            self.draw_gun(fb, LSM_X & !7, cy);
         }
     }
 }
@@ -778,6 +796,27 @@ fn blit(fb: &mut Framebuffer, pic: &Picture, dx: i32, dy: i32) {
             }
             fb.pixels[y as usize * WIDTH + x as usize] =
                 pic.pixels[row as usize * pic.width + col as usize];
+        }
+    }
+}
+
+/// Like [`blit`], but skip pixels equal to `mask` (the menu gun's empty space
+/// is painted as BKGDCOLOR, not true transparency).
+fn blit_masked(fb: &mut Framebuffer, pic: &Picture, dx: i32, dy: i32, mask: u32) {
+    for row in 0..pic.height as i32 {
+        let y = dy + row;
+        if y < 0 || y as usize >= HEIGHT {
+            continue;
+        }
+        for col in 0..pic.width as i32 {
+            let x = dx + col;
+            if x < 0 || x as usize >= WIDTH {
+                continue;
+            }
+            let c = pic.pixels[row as usize * pic.width + col as usize];
+            if c != mask {
+                fb.pixels[y as usize * WIDTH + x as usize] = c;
+            }
         }
     }
 }
