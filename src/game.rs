@@ -426,6 +426,9 @@ pub struct Game {
     /// A dedicated RNG for menu flavor (the Quit prompt's message). Kept apart
     /// from the gameplay stream so opening a menu cannot shift the simulation.
     menu_rnd: Rnd,
+    /// Cosmetic stream for BJ face glances (`UpdateFace`); never touches the
+    /// gameplay RNG the demos and combat rolls depend on.
+    face_rnd: Rnd,
 
     // Player stats — displayed on the HUD.
     pub health: i32,
@@ -452,6 +455,13 @@ pub struct Game {
     pub god: bool,
     /// Cheat: ammo never decrements (the 9 key).
     pub infinite_ammo: bool,
+
+    /// BJ status-bar glance frame 0..=2 (WL_AGENT.C `gamestate.faceframe`).
+    pub faceframe: u8,
+    /// Tic accumulator for `UpdateFace` (compared against a face-stream roll).
+    facecount: f32,
+    /// Force `GOTGATLINGPIC` after a chaingun pickup until the next glance.
+    pub got_gatling_face: bool,
 
     // Weapon firing animation (WL_AGENT.C T_Attack).
     attacking: bool,
@@ -562,6 +572,7 @@ impl Game {
             should_quit: false,
             quit_msg: 0,
             menu_rnd: Rnd::new(),
+            face_rnd: Rnd::new(),
             health: 100,
             ammo: 8,
             score: 0,
@@ -575,6 +586,9 @@ impl Game {
             spear_pending: false,
             god: false,
             infinite_ammo: false,
+            faceframe: 1, // B / center look (DrawFace default before first glance)
+            facecount: 0.0,
+            got_gatling_face: false,
             attacking: false,
             attack_frame: 0,
             attack_count: 0.0,
@@ -1729,6 +1743,9 @@ impl Game {
             }
         }
 
+        // UpdateFace runs from T_Player / T_Attack every think.
+        self.update_face(dt / TIC);
+
         self.stats.time += dt;
         self.world.tick(dt, &self.player);
         if input.use_door {
@@ -1811,6 +1828,10 @@ impl Game {
             madenoise,
         );
         let damage = self.actors.take_damage();
+        if damage > 0 {
+            // TakeDamage clears the gatling grin and redraws the face.
+            self.got_gatling_face = false;
+        }
         if !self.god {
             self.health -= damage;
         }
@@ -2013,6 +2034,9 @@ impl Game {
             }
             Bonus::ChainGun => {
                 self.give_weapon(WEAPON_CHAINGUN);
+                // GOTGATLINGPIC until the next UpdateFace redraw.
+                self.got_gatling_face = true;
+                self.facecount = 0.0;
                 true
             }
             Bonus::Key1 => {
@@ -2053,7 +2077,29 @@ impl Game {
             return false;
         }
         self.health = (self.health + amount).min(100);
+        // HealSelf zeroes gotgatgun so the gatling grin does not stick.
+        self.got_gatling_face = false;
         true
+    }
+
+    /// UpdateFace (WL_AGENT.C): accumulate tics; when past a face-stream roll,
+    /// pick a new glance frame (0/1/2). Uses a dedicated RNG so cosmetic
+    /// glances cannot shift combat determinism.
+    fn update_face(&mut self, tics: f32) {
+        // Original returns early while GETGATLINGSND is still playing; we hold
+        // the grin via `got_gatling_face` and only clear it on the next redraw.
+        self.facecount += tics;
+        if self.facecount <= self.face_rnd.roll() as f32 {
+            return;
+        }
+        // faceframe = US_RndT() >> 6; if 3, force center (1).
+        let mut frame = (self.face_rnd.roll() >> 6) as u8;
+        if frame == 3 {
+            frame = 1;
+        }
+        self.faceframe = frame;
+        self.facecount = 0.0;
+        self.got_gatling_face = false;
     }
 
     /// GiveAmmo: add ammo up to 99, skipping (not consuming) the item when full.
@@ -2299,6 +2345,8 @@ impl Game {
                 health: self.health,
                 ammo: self.ammo,
                 keys: self.keys,
+                faceframe: self.faceframe,
+                gatling_grin: self.got_gatling_face,
             },
         );
     }

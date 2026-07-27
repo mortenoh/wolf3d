@@ -1,6 +1,7 @@
 //! Fidelity checks for original-game behavior: score extralives
 //! (GivePoints / EXTRAPOINTS), bestweapon tracking, per-floor ceiling colours,
-//! SOD spectre rematerialisation (A_Dormant), and the death FizzleFade.
+//! SOD spectre rematerialisation (A_Dormant), the death FizzleFade, and BJ
+//! face glances (UpdateFace).
 
 use wolf3d::actors::Kind;
 use wolf3d::assets::{MapSet, data_dir};
@@ -365,6 +366,101 @@ fn death_fizzle_game_over_leaves_play() {
         GameScreen::Playing,
         "out of lives must not restart the floor"
     );
+}
+
+/// UpdateFace cycles `faceframe` among 0/1/2 without advancing the gameplay RNG.
+#[test]
+fn update_face_glances_without_touching_gameplay_rng() {
+    let mut game = Game::new(0);
+    game.god = true;
+    // Park away from anything that could fight or roll combat RNG.
+    game.player.x = 29.5;
+    game.player.y = 57.5;
+
+    let rng_before = game.actors.rng_index();
+    let snd_before = game.actors.snd_rng_index();
+    let start_frame = game.faceframe;
+    assert!(
+        start_frame <= 2,
+        "faceframe must be 0..=2, got {start_frame}"
+    );
+
+    let mut seen = [false; 3];
+    seen[start_frame as usize] = true;
+    let mut changed = false;
+    // facecount grows until it exceeds a 0..=255 roll; worst case ~256 tics.
+    for _ in 0..400 {
+        game.update(DT, &Input::default());
+        assert!(
+            game.faceframe <= 2,
+            "faceframe out of range: {}",
+            game.faceframe
+        );
+        seen[game.faceframe as usize] = true;
+        if game.faceframe != start_frame {
+            changed = true;
+        }
+    }
+    assert!(changed, "faceframe should glance away from the start frame");
+    assert!(
+        seen.iter().filter(|&&s| s).count() >= 2,
+        "expected at least two distinct glance frames over time, saw {seen:?}"
+    );
+    assert_eq!(
+        game.actors.rng_index(),
+        rng_before,
+        "UpdateFace must not advance the gameplay RNG"
+    );
+    assert_eq!(
+        game.actors.snd_rng_index(),
+        snd_before,
+        "UpdateFace must not advance the sound RNG"
+    );
+}
+
+/// Picking up the chaingun forces GOTGATLINGPIC until the next UpdateFace redraw.
+#[test]
+fn chaingun_pickup_forces_gatling_grin() {
+    use wolf3d::raycast::{Bonus, StaticSprite};
+
+    let mut game = Game::new(0);
+    game.god = true;
+    // Place a chaingun on the player tile and collect it.
+    let px = game.player.x.floor() as i32;
+    let py = game.player.y.floor() as i32;
+    game.world.statics.push(StaticSprite {
+        x: px as f32 + 0.5,
+        y: py as f32 + 0.5,
+        sprite: 0,
+        bonus: Some(Bonus::ChainGun),
+        picked: false,
+    });
+    // One tic of standing still: try_pickups runs inside update_play.
+    game.update(DT, &Input::default());
+    assert_eq!(
+        game.bestweapon, WEAPON_CHAINGUN,
+        "chaingun should be collected"
+    );
+    // update_face runs before pickups in the same tic, so the grin is set
+    // after that tic's face roll; it should be visible at least once.
+    assert!(
+        game.got_gatling_face,
+        "chaingun pickup should force GOTGATLINGPIC"
+    );
+    // Drive until UpdateFace clears the grin.
+    let mut cleared = false;
+    for _ in 0..400 {
+        game.update(DT, &Input::default());
+        if !game.got_gatling_face {
+            cleared = true;
+            break;
+        }
+    }
+    assert!(
+        cleared,
+        "gatling grin should clear after UpdateFace redraws"
+    );
+    assert!(game.faceframe <= 2);
 }
 
 /// The 17-bit LFSR covers every pixel of a classic 320x160 view (unit-level
