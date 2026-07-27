@@ -9,9 +9,6 @@
 //! whole simulation stays frame-rate independent and reproduces headlessly.
 //!
 //! Deliberate simplifications vs. the original:
-//! - Line of sight / `CheckLine` samples the segment on a fine grid rather than
-//!   the original fixed-point DDA; walls are full tiles so this is equivalent in
-//!   practice. A door blocks sight until it is ~40% open.
 //! - Pain frames render single-view (the original's "2 rotation" pain art is
 //!   collapsed to one frame).
 //! - Actors are not blocked by blocking static objects (tables etc.), matching
@@ -26,6 +23,10 @@
 //! Area connectivity follows WL_ACT1.C: open doors link floor areas via
 //! `areaconnect`, and `areabyplayer` is recomputed from the player's area
 //! (doors connect on first open, disconnect only when fully closed).
+//!
+//! Line of sight uses the WL_STATE.C `CheckLine` two-pass DDA at 1/256-tile
+//! precision (vertical then horizontal grid steps), including the original
+//! door-intercept vs `doorposition` test.
 //!
 //! Implemented and tested against WOLFSRC: Pac-Man ghosts (E3M10), SOD spectres
 //! with A_Dormant rematerialisation, rocket smoke/boom frames, deathcam via a
@@ -48,9 +49,6 @@ const SPD_DOG: f32 = 1500.0;
 /// MINACTORDIST 0x10000 and MINSIGHT 0x18000, in tiles.
 const MIN_ACTOR_DIST: f32 = 1.0;
 const MIN_SIGHT: f32 = 1.5;
-/// A door must be at least this open to see through it (CheckLine stand-in).
-const DOOR_SEE: f32 = 0.4;
-
 // Direction codes match WL_DEF.H `dirtype`.
 const EAST: u8 = 0;
 const NORTHEAST: u8 = 1;
@@ -3296,38 +3294,101 @@ pub fn line_clear(world: &World, x0: f32, y0: f32, x1: f32, y1: f32) -> bool {
     check_line(world, x0, y0, x1, y1)
 }
 
-/// CheckLine (WL_STATE.C): is the segment from (x0,y0) to (x1,y1) unobstructed
-/// by walls or shut doors? Sampled on a fine grid (walls are full tiles).
-fn check_line(world: &World, x0: f32, y0: f32, x1: f32, y1: f32) -> bool {
-    let dx = x1 - x0;
-    let dy = y1 - y0;
-    let len = (dx * dx + dy * dy).sqrt();
-    if len < 1e-4 {
-        return true;
+/// Convert a tile-space float to the original's 1/256-tile unsigned coordinate
+/// (`ob->x >> UNSIGNEDSHIFT`).
+#[inline]
+fn to_ufrac(v: f32) -> i32 {
+    (v * 256.0) as i32
+}
+
+/// CheckLine (WL_STATE.C): true when the straight line between two points is
+/// unobstructed by walls or insufficiently open doors.
+///
+/// Walks vertical grid lines then horizontal ones at 1/256-tile precision.
+/// Door tiles use the original test `intercept > doorposition` with
+/// `doorposition` in 0..=0xffff (leading edge of the door).
+fn check_line(world: &World, ax: f32, ay: f32, bx: f32, by: f32) -> bool {
+    let x1 = to_ufrac(ax);
+    let y1 = to_ufrac(ay);
+    let x2 = to_ufrac(bx);
+    let y2 = to_ufrac(by);
+    let xt1 = x1 >> 8;
+    let yt1 = y1 >> 8;
+    let mut xt2 = x2 >> 8;
+    let mut yt2 = y2 >> 8;
+
+    // ---- Pass 1: step along vertical map lines (x) ----
+    let xdist = (xt2 - xt1).abs();
+    if xdist > 0 {
+        let (partial, xstep) = if xt2 > xt1 {
+            (256 - (x1 & 0xff), 1)
+        } else {
+            (x1 & 0xff, -1)
+        };
+        let deltafrac = (x2 - x1).abs().max(1);
+        let delta = y2 - y1;
+        let mut ltemp = ((delta as i64) << 8) / deltafrac as i64;
+        ltemp = ltemp.clamp(-0x7fff, 0x7fff);
+        let ystep = ltemp as i32;
+        let mut yfrac = y1.wrapping_add(((ystep as i64 * partial as i64) >> 8) as i32);
+
+        let mut x = xt1 + xstep;
+        xt2 += xstep;
+        while x != xt2 {
+            let y = yfrac >> 8;
+            yfrac = yfrac.wrapping_add(ystep);
+            let intercept = yfrac.wrapping_sub(ystep / 2);
+            if !trace_cell(world, x, y, intercept) {
+                return false;
+            }
+            x += xstep;
+        }
     }
-    let steps = (len * 16.0).ceil() as i32;
-    let (sx, sy) = (x0.floor() as i32, y0.floor() as i32);
-    let (ex, ey) = (x1.floor() as i32, y1.floor() as i32);
-    for s in 1..steps {
-        let t = s as f32 / steps as f32;
-        let x = x0 + dx * t;
-        let y = y0 + dy * t;
-        let (tx, ty) = (x.floor() as i32, y.floor() as i32);
-        // Ignore the endpoints' own tiles.
-        if (tx == sx && ty == sy) || (tx == ex && ty == ey) {
-            continue;
-        }
-        if world.wall_at(tx, ty) {
-            return false;
-        }
-        if world
-            .door_lookup(tx, ty)
-            .is_some_and(|d| world.door_position(d) < DOOR_SEE)
-        {
-            return false;
+
+    // ---- Pass 2: step along horizontal map lines (y) ----
+    let ydist = (yt2 - yt1).abs();
+    if ydist > 0 {
+        let (partial, ystep) = if yt2 > yt1 {
+            (256 - (y1 & 0xff), 1)
+        } else {
+            (y1 & 0xff, -1)
+        };
+        let deltafrac = (y2 - y1).abs().max(1);
+        let delta = x2 - x1;
+        let mut ltemp = ((delta as i64) << 8) / deltafrac as i64;
+        ltemp = ltemp.clamp(-0x7fff, 0x7fff);
+        let xstep = ltemp as i32;
+        let mut xfrac = x1.wrapping_add(((xstep as i64 * partial as i64) >> 8) as i32);
+
+        let mut y = yt1 + ystep;
+        yt2 += ystep;
+        while y != yt2 {
+            let x = xfrac >> 8;
+            xfrac = xfrac.wrapping_add(xstep);
+            let intercept = xfrac.wrapping_sub(xstep / 2);
+            if !trace_cell(world, x, y, intercept) {
+                return false;
+            }
+            y += ystep;
         }
     }
+
     true
+}
+
+/// One CheckLine cell: empty is fine, solid wall blocks, doors use the
+/// intercept vs `doorposition` (0..=0xffff) open test.
+fn trace_cell(world: &World, x: i32, y: i32, intercept: i32) -> bool {
+    if x < 0 || y < 0 || x >= MAP_SIZE as i32 || y >= MAP_SIZE as i32 {
+        return false;
+    }
+    if let Some(d) = world.door_lookup(x, y) {
+        // doorposition 0..=0xffff (WL_ACT1.C); original: intercept > doorposition
+        // blocks. Units are the original's mixed absolute-vs-open quirk.
+        let doorposition = (world.door_position(d) * 65535.0) as i32;
+        return intercept <= doorposition;
+    }
+    !world.wall_at(x, y)
 }
 
 /// Decode a boss spawn code into (kind, facing dir). Bosses are single tiles

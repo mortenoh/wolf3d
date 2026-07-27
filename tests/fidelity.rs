@@ -1,9 +1,9 @@
 //! Fidelity checks for original-game behavior: score extralives
 //! (GivePoints / EXTRAPOINTS), bestweapon tracking, per-floor ceiling colours,
 //! SOD spectre rematerialisation (A_Dormant), the death FizzleFade, BJ face
-//! glances (UpdateFace), and area connectivity (`areabyplayer`).
+//! glances (UpdateFace), area connectivity (`areabyplayer`), and CheckLine.
 
-use wolf3d::actors::Kind;
+use wolf3d::actors::{self, Kind};
 use wolf3d::assets::{MapSet, data_dir};
 use wolf3d::fb::{Framebuffer, WIDTH};
 use wolf3d::fizzle::{self, Fizzle};
@@ -19,6 +19,9 @@ const DT: f32 = 1.0 / 70.0;
 
 /// Drive point-blank fire at the nearest matching live enemy until it dies or
 /// `max_tics` elapse. Returns true if something died (score rose from a kill).
+///
+/// Stands on the enemy's own floor tile (slightly west, facing east) so the
+/// CheckLine DDA does not treat the player endpoint as a solid wall cell.
 fn kill_nearest(game: &mut Game, pred: impl Fn(Kind) -> bool, max_tics: u32) -> bool {
     let start_score = game.score;
     for _ in 0..max_tics {
@@ -35,7 +38,9 @@ fn kill_nearest(game: &mut Game, pred: impl Fn(Kind) -> bool, max_tics: u32) -> 
         let Some((_, tx, ty)) = target else {
             break;
         };
-        game.player.x = tx - 0.55;
+        // Same tile as the enemy, 0.3 west — stays on floor for typical center
+        // spawns (tile+0.5) and keeps a clear east-facing shot.
+        game.player.x = tx - 0.3;
         game.player.y = ty;
         game.player.angle = 0.0;
         game.update(
@@ -444,6 +449,52 @@ fn same_area_stays_connected_through_closed_door() {
     assert!(
         game.world.in_player_area(33, 57),
         "same-area tiles remain in areabyplayer with the door shut"
+    );
+}
+
+/// CheckLine DDA: walls block, open floors clear, closed doors block, fully
+/// open doors pass (WL_STATE.C intercept vs doorposition).
+#[test]
+fn check_line_dda_walls_and_doors() {
+    let mut game = Game::new(0);
+    // Spawn corridor is open east toward the first door at (32, 57).
+    let a = (29.5, 57.5);
+    let before_door = (31.5, 57.5);
+    let past_door = (33.5, 57.5);
+
+    assert!(
+        actors::line_clear(&game.world, a.0, a.1, before_door.0, before_door.1),
+        "open floor to the door tile should be clear"
+    );
+    assert!(
+        !actors::line_clear(&game.world, a.0, a.1, past_door.0, past_door.1),
+        "closed door at (32,57) should block CheckLine"
+    );
+
+    // A solid wall north of the spawn corridor (row y=55 is wall tex).
+    assert!(
+        !actors::line_clear(&game.world, 29.5, 57.5, 29.5, 54.5),
+        "wall north of the start corridor should block"
+    );
+
+    // Open the first door fully and re-test.
+    let idx = game
+        .world
+        .door_lookup(32, 57)
+        .expect("E1M1 door at (32,57)");
+    game.world.request_open_door(idx);
+    // Force fully open (doorposition == 0xffff).
+    for _ in 0..100 {
+        game.world.tick(DT, &game.player);
+    }
+    assert!(
+        game.world.door_position(idx) >= 0.99,
+        "door should be fully open, got {}",
+        game.world.door_position(idx)
+    );
+    assert!(
+        actors::line_clear(&game.world, a.0, a.1, past_door.0, past_door.1),
+        "fully open door must not block CheckLine"
     );
 }
 
