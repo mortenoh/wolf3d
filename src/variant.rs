@@ -1,10 +1,15 @@
-//! Game-variant selection: Wolfenstein 3D (WL6) vs. Spear of Destiny (SOD).
+//! Game-variant selection: Wolfenstein 3D (WL6) vs. Spear of Destiny (SOD and
+//! its mission packs).
 //!
-//! The two share an engine but diverge in their data-file extension, their
+//! The games share an engine but diverge in their data-file extension, their
 //! VGAGRAPH chunk numbering (GFXV_WL6.H vs. GFXV_SOD.H), their sprite numbering
 //! (SOD adds four static sprites, shifting every actor sprite by +4, and swaps
-//! the boss cast), their level layout (SOD is one 21-level campaign with no
+//! the boss cast), their level layout (Spear is one 21-level campaign with no
 //! episode select), and their per-floor songs and par times.
+//!
+//! Spear mission packs 2 and 3 (GOG `app/M2`, `app/M3`) use the same engine
+//! tables and graphics headers as the original campaign (`app/M1` → `.SOD`),
+//! with their own maps/VSWAP under the `.SD2` / `.SD3` extensions.
 //!
 //! A [`Variant`] is built once at startup from [`Variant::detect`] and threaded
 //! into the asset loaders (file extension), the constant tables here, and the
@@ -171,9 +176,10 @@ const SOD_PAR_TIMES: [f32; 21] = [
     0.0,
 ];
 
+#[derive(Clone, Copy)]
 pub struct Variant {
     pub id: GameId,
-    /// Data-file extension: `"WL6"` or `"SOD"`.
+    /// Data-file extension: `"WL6"`, `"SOD"`, `"SD2"`, or `"SD3"`.
     pub ext: &'static str,
     /// SOD has no episode select — New Game goes straight to difficulty.
     pub has_episodes: bool,
@@ -196,10 +202,26 @@ impl Variant {
         }
     }
 
+    /// Original Spear of Destiny campaign (GOG `app/M1` → `*.SOD`).
     pub fn sod() -> Self {
+        Self::spear("SOD")
+    }
+
+    /// Spear mission pack 2 — Return to Danger (GOG `app/M2` → `*.SD2`).
+    pub fn sd2() -> Self {
+        Self::spear("SD2")
+    }
+
+    /// Spear mission pack 3 — Ultimate Challenge (GOG `app/M3` → `*.SD3`).
+    pub fn sd3() -> Self {
+        Self::spear("SD3")
+    }
+
+    /// Shared Spear-of-Destiny engine tables with a pack-specific data extension.
+    fn spear(ext: &'static str) -> Self {
         Self {
             id: GameId::Sod,
-            ext: "SOD",
+            ext,
             has_episodes: false,
             gfx: GFX_SOD,
             sprite_shift: 4,
@@ -215,15 +237,18 @@ impl Variant {
         data_dir().join(format!("VSWAP.{ext}")).is_file()
     }
 
-    /// Select the variant to run: `WOLF3D_GAME=sod` (or `wl6`) forces it;
-    /// otherwise auto-detect — if only one data set is present use it, and if
-    /// both are present default to WL6.
+    /// Select the variant to run: `WOLF3D_GAME=sod|sd2|sd3|wl6` forces it;
+    /// otherwise auto-detect — if only the original SOD data is present use it,
+    /// else default to WL6. Mission packs are never auto-selected (they need an
+    /// explicit `WOLF3D_GAME`).
     pub fn detect() -> Self {
         match std::env::var("WOLF3D_GAME")
             .ok()
             .map(|s| s.to_ascii_lowercase())
         {
-            Some(s) if s == "sod" || s == "spear" => return Self::sod(),
+            Some(s) if s == "sod" || s == "spear" || s == "m1" => return Self::sod(),
+            Some(s) if s == "sd2" || s == "sod2" || s == "m2" => return Self::sd2(),
+            Some(s) if s == "sd3" || s == "sod3" || s == "m3" => return Self::sd3(),
             Some(s) if s == "wl6" || s == "wolf3d" => return Self::wl6(),
             _ => {}
         }
@@ -284,4 +309,10 @@ impl Variant {
 /// True when a data file for the given extension exists under `dir`.
 pub fn has_data(dir: &Path, ext: &str) -> bool {
     dir.join(format!("VSWAP.{ext}")).is_file()
+}
+
+/// True when `ext` is a Spear-family data set (original campaign or a mission
+/// pack). Used by loaders that share the SOD audio / graphics bank layout.
+pub fn is_spear_ext(ext: &str) -> bool {
+    matches!(ext.to_ascii_uppercase().as_str(), "SOD" | "SD2" | "SD3")
 }

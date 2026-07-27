@@ -39,12 +39,30 @@ impl MapSet {
         Self::load_ext(dir, "WL6")
     }
 
-    /// Load the GAMEMAPS/MAPHEAD map set for a given extension (`WL6` / `SOD`).
+    /// Load the GAMEMAPS/MAPHEAD map set for a given extension (`WL6` / `SOD` /
+    /// `SD2` / `SD3`).
+    ///
+    /// Retail MAPHEAD is RLEW tag + 100 `i32` offsets (402 bytes). Spear mission
+    /// packs 2 and 3 ship a short MAPHEAD with only as many offsets as they have
+    /// floors (RLEW + 21×4 = 86 bytes). Read whatever is present and treat any
+    /// missing slots as empty (`0`) so [`num_levels`] still works.
     pub fn load_ext(dir: &Path, ext: &str) -> std::io::Result<Self> {
         let maphead = std::fs::read(dir.join(format!("MAPHEAD.{ext}")))?;
         let gamemaps = std::fs::read(dir.join(format!("GAMEMAPS.{ext}")))?;
+        if maphead.len() < 2 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("MAPHEAD.{ext} is too short"),
+            ));
+        }
         let rlew_tag = u16at(&maphead, 0);
-        let offsets = (0..NUM_MAPS).map(|i| i32at(&maphead, 2 + i * 4)).collect();
+        let available = (maphead.len() - 2) / 4;
+        let n = available.min(NUM_MAPS);
+        let mut offsets = Vec::with_capacity(NUM_MAPS);
+        for i in 0..n {
+            offsets.push(i32at(&maphead, 2 + i * 4));
+        }
+        offsets.resize(NUM_MAPS, 0);
         Ok(Self {
             gamemaps,
             rlew_tag,

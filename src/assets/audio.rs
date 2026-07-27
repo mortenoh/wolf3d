@@ -56,15 +56,16 @@ impl AudioData {
         Self::load_ext(dir, "WL6")
     }
 
-    /// Load AUDIOHED/AUDIOT for a given extension (`WL6` / `SOD`).
+    /// Load AUDIOHED/AUDIOT for a given extension (`WL6` / `SOD` / `SD2` / `SD3`).
     ///
-    /// Spear of Destiny reorders its sound enum and uses different bank offsets
-    /// (AUDIOSOD.H: STARTADLIBSOUNDS 81, STARTMUSIC 243, 24 songs). The game
-    /// engine always emits WL6 sound-enum ids, so the SOD path indexes its AdLib
-    /// effects by a WL6->SOD name remap ([`sod_sfx_remap`]) — a WL6 id lands on
-    /// the SOD chunk of the same name, or `None` when SOD has no such effect.
-    /// Songs are indexed directly by the SOD music enum. Digitized playback is
-    /// disabled for SOD (adlib-only) — the SOD DigiMap is not modeled.
+    /// Spear of Destiny (and its mission packs) reorders its sound enum and uses
+    /// different bank offsets (AUDIOSOD.H: STARTADLIBSOUNDS 81, STARTMUSIC 243,
+    /// 24 songs). The game engine always emits WL6 sound-enum ids, so the Spear
+    /// path indexes its AdLib effects by a WL6->SOD name remap
+    /// ([`sod_sfx_remap`]) — a WL6 id lands on the SOD chunk of the same name,
+    /// or `None` when SOD has no such effect. Songs are indexed directly by the
+    /// SOD music enum. Digitized playback is disabled for Spear (adlib-only) —
+    /// the SOD DigiMap is not modeled. M2/M3 ship the same AUDIOT as M1.
     pub fn load_ext(dir: &Path, ext: &str) -> std::io::Result<Self> {
         let head = std::fs::read(dir.join(format!("AUDIOHED.{ext}")))?;
         let audiot = std::fs::read(dir.join(format!("AUDIOT.{ext}")))?;
@@ -86,7 +87,7 @@ impl AudioData {
             &audiot[a..b]
         };
 
-        let sod = ext.eq_ignore_ascii_case("SOD");
+        let sod = crate::variant::is_spear_ext(ext);
         // Bank offsets differ per variant.
         let (start_adlib, start_music, num_music) = if sod {
             (81usize, 243usize, 24usize)

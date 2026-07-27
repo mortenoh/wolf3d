@@ -9,7 +9,8 @@ released source.
 ## What works
 
 - The full registered Wolfenstein 3D: all 6 episodes, 60 levels
-- Spear of Destiny: the 21-floor campaign (`make run-sod`)
+- Spear of Destiny: the original 21-floor campaign (`make run-sod`) plus the
+  two GOG mission packs when extracted (`make run-sod-m2` / `run-sod-m3`)
 - All enemies and bosses, including the two-phase mecha-Hitler fight, the
   Angel of Death, and the E3M10 ghosts
 - Sliding doors, locked doors and keys, secret push-walls, pickups
@@ -17,7 +18,8 @@ released source.
   save/load with named slots, Change View, Read This!, high scores, and the
   random Y/N Quit taunt
 - Sound: digitized effects plus AdLib music and effects through OPL2 emulation
-  (nuked-opl3)
+  (nuked-opl3). The Sound menu's "Synthesized" mode is OPL-only (no PC-speaker
+  bank — that path is intentionally not reimplemented)
 - Floor-completed intermission with ratio bonuses, deathcam, victory sequence,
   end-of-episode story text
 - Attract mode with recorded demo playback (our own demo format; deterministic
@@ -33,9 +35,18 @@ No copyrighted game data is included. Buy Wolfenstein 3D + Spear of Destiny
 brew install innoextract          # apt install innoextract on Linux
 make data                         # extracts the .WL6 files
 make run                          # play Wolfenstein 3D
-make data-sod                     # extracts Spear of Destiny (M1 campaign)
+make data-sod                     # extracts Spear of Destiny M1 (*.SOD)
 make run-sod                      # play Spear of Destiny
+make data-sod-m2                  # mission pack 2 → *.SD2 (optional)
+make run-sod-m2                   # Return to Danger
+make data-sod-m3                  # mission pack 3 → *.SD3 (optional)
+make run-sod-m3                   # Ultimate Challenge
 ```
+
+`make data-all` pulls WL6 plus all three Spear packs. Mission packs share the
+Spear engine tables; they are selected with `WOLF3D_GAME=sd2` / `sd3` (the
+`run-sod-m*` targets set this). They are never auto-selected when WL6 or M1
+data is also present.
 
 The run targets extract the data first, so `make run` on a fresh checkout is
 enough. On Linux, cpal's ALSA backend also needs the system headers

@@ -407,3 +407,81 @@ fn wl6_keeps_its_solid_statinfo_40() {
         "Spear's index 40 is a hanging lamp and must not block"
     );
 }
+
+// --- Mission packs 2 / 3 (GOG app/M2 → *.SD2, app/M3 → *.SD3) ---------------
+//
+// Same 21-floor Spear layout and engine tables as M1; different maps/VSWAP.
+// Short MAPHEADs (86 bytes) used to panic the loader — covered here.
+
+fn pack_present(ext: &str) -> bool {
+    if Variant::present(ext) {
+        return true;
+    }
+    eprintln!("skipping mission-pack test: data/VSWAP.{ext} not present");
+    false
+}
+
+/// Smoke-test one Spear mission pack: short MAPHEAD loads as 21 floors, every
+/// floor spawns, and assets decode.
+fn spear_pack_smoke(ext: &str, variant: Variant) {
+    let maps = MapSet::load_ext(&data_dir(), ext).unwrap_or_else(|e| panic!("GAMEMAPS.{ext}: {e}"));
+    assert_eq!(
+        maps.num_levels(),
+        21,
+        "{ext} should be a 21-floor Spear campaign"
+    );
+    let vswap = VSwap::load_ext(&data_dir(), ext).unwrap_or_else(|e| panic!("VSWAP.{ext}: {e}"));
+    assert!(
+        vswap.sprites.len() >= 380,
+        "{ext} sprite bank unexpectedly small: {}",
+        vswap.sprites.len()
+    );
+    let vga =
+        VgaGraph::load_ext(&data_dir(), ext).unwrap_or_else(|e| panic!("VGAGRAPH.{ext}: {e}"));
+    let bar = vga.pic(variant.gfx.statusbar);
+    assert_eq!((bar.width, bar.height), (320, 40));
+
+    for idx in 0..maps.num_levels() {
+        // Game::new_variant runs find_spawn + spawn_from_level_variant; a missing
+        // player start or a bad decode would panic here.
+        let game = Game::new_variant(idx, variant);
+        assert!(
+            game.player.x > 0.0 && game.player.y > 0.0,
+            "{ext} floor {idx} missing player start"
+        );
+    }
+}
+
+#[test]
+fn sd2_mission_pack_loads_when_present() {
+    if !pack_present("SD2") {
+        return;
+    }
+    spear_pack_smoke("SD2", Variant::sd2());
+}
+
+#[test]
+fn sd3_mission_pack_loads_when_present() {
+    if !pack_present("SD3") {
+        return;
+    }
+    spear_pack_smoke("SD3", Variant::sd3());
+}
+
+/// MAPHEAD for M2/M3 is only 86 bytes (RLEW + 21 offsets). The loader must not
+/// require the retail 100-slot / 402-byte layout.
+#[test]
+fn short_maphead_mission_packs_do_not_panic() {
+    for ext in ["SD2", "SD3"] {
+        if !Variant::present(ext) {
+            continue;
+        }
+        let maps = MapSet::load_ext(&data_dir(), ext).expect("short MAPHEAD");
+        assert_eq!(maps.num_levels(), 21, "{ext}");
+        // Spot-check first and last level decode.
+        let first = maps.level(0);
+        let last = maps.level(20);
+        assert_eq!(first.plane0.len(), N * N);
+        assert_eq!(last.plane0.len(), N * N);
+    }
+}
