@@ -42,7 +42,7 @@ HEADLESS   ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help run run-sod run-sod-m2 run-sod-m3 record demo play-demo gen-demos gen-demo \
+.PHONY: help run run-sod run-sod-m2 run-sod-m3 record demo play-demo gen-demos gen-demos-full gen-demo \
         build build-release release ensure-mac-targets \
         check fmt fmt-check clippy test test-compile ci data data-sod \
         data-sod-m2 data-sod-m3 data-all clean clean-data clean-saves \
@@ -88,12 +88,23 @@ MAX_SECS ?= 120
 SEARCH_SEED ?=
 GOD      ?=
 FOCUS    ?= secrets
+LOG_DIR  ?= logs
+FULL_LOG ?= $(LOG_DIR)/forge-$(shell date +%Y%m%d-%H%M%S).log
 
 gen-demos: data ## AI-search fair demos for every WL6 floor (wolf3d forge)
 	$(CARGO) run --release --bin wolf3d -- forge --iters $(ITERS) \
 		$(if $(THREADS),--threads $(THREADS)) --max-secs $(MAX_SECS) \
 		$(if $(SEARCH_SEED),--search-seed $(SEARCH_SEED)) \
 		$(if $(filter 1,$(GOD)),--god) --focus $(FOCUS)
+
+gen-demos-full: ITERS = 400000
+gen-demos-full: data ## Full 400k/floor forge run, logged under logs/
+	@mkdir -p "$(dir $(FULL_LOG))"
+	@echo "forge log: $(FULL_LOG)"
+	@bash -o pipefail -c '$(CARGO) run --release --bin wolf3d -- forge --iters $(ITERS) \
+		$(if $(THREADS),--threads $(THREADS)) --max-secs $(MAX_SECS) \
+		$(if $(SEARCH_SEED),--search-seed $(SEARCH_SEED)) \
+		$(if $(filter 1,$(GOD)),--god) --focus $(FOCUS) 2>&1 | tee "$$1"' _ "$(FULL_LOG)"
 
 gen-demo: data ## AI-search one floor (LEVEL=0-based index, ITERS=n)
 	@test -n "$(LEVEL)" || { echo "LEVEL is required (0-based), e.g. make gen-demo LEVEL=0 ITERS=100000"; exit 1; }

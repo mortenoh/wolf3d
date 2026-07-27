@@ -103,6 +103,7 @@ finish/kill/secret point objective instead.
 ```
 make gen-demo LEVEL=0 ITERS=100000
 make gen-demos ITERS=50000 THREADS=8
+make gen-demos-full # 400k/floor; timestamped log under logs/
 make gen-demo LEVEL=0 ITERS=100000 GOD=1 FOCUS=secrets
 make gen-demo LEVEL=0 ITERS=100000 SEARCH_SEED=123456
 ```

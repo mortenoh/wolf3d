@@ -5,3 +5,5 @@
 /bin
 # Headless demo snapshots (`make demo`).
 /snaps
+# Long-running forge output (`make gen-demos-full`).
+/logs
