@@ -2,7 +2,7 @@
 //! The windowed frontend translates key state into [`Input`]; the headless
 //! demo driver synthesizes it. Both run exactly the same code.
 
-use crate::actors::{Actors, Kind};
+use crate::actors::{Actors, Kind, Rnd};
 use crate::assets::{self, MapSet, VSwap, VgaGraph};
 use crate::config::{self, Config, MAX_MOUSE_SENS, MAX_VIEW, MIN_VIEW, VIEW_STEP};
 use crate::demorec::Demo;
@@ -119,6 +119,9 @@ pub enum GameScreen {
     HighScoreEntry,
     /// The "Read This!" help article (WL_TEXT.C `HelpScreens`).
     ReadThis,
+    /// The Quit confirmation prompt (WL_MENU.C `CP_Quit`): a random taunt from
+    /// `END_STRINGS` over the main menu, waiting on Y / N / Esc.
+    QuitConfirm,
     /// The level-select cheat screen (the 6 key during play): a 6x10
     /// episode/floor grid; Enter warps, keeping the current stats.
     LevelSelect,
@@ -408,8 +411,13 @@ pub struct Game {
     /// True once a game has been started from the menu (so Esc in the menu can
     /// resume play rather than fall back to the title).
     pub started: bool,
-    /// Set when the player picks Quit; the frontend maps it to an exit.
+    /// Set when the player confirms Quit; the frontend maps it to an exit.
     pub should_quit: bool,
+    /// Index into [`menu::END_STRINGS`] of the taunt the Quit prompt is showing.
+    pub quit_msg: usize,
+    /// A dedicated RNG for menu flavor (the Quit prompt's message). Kept apart
+    /// from the gameplay stream so opening a menu cannot shift the simulation.
+    menu_rnd: Rnd,
 
     // Player stats — displayed on the HUD.
     pub health: i32,
@@ -464,7 +472,7 @@ impl Game {
             .unwrap_or_else(|e| panic!("failed to load VGAGRAPH.{ext} from {dir:?}: {e}"));
         let hud = Hud::new(&vga, &variant.gfx);
         let menu = Menu::new(&vga, &variant);
-        let inter_gfx = InterGfx::new(&vga, &variant.gfx);
+        let inter_gfx = InterGfx::new(&vga, &variant);
         // The tests and WOLF3D_LEVEL boot straight into a playable level at the
         // hardest skill (all difficulty tiers present), so keep that the default.
         let difficulty = Difficulty::Hard;
@@ -539,6 +547,8 @@ impl Game {
             music_on: true,
             started: true,
             should_quit: false,
+            quit_msg: 0,
+            menu_rnd: Rnd::new(),
             health: 100,
             ammo: 8,
             score: 0,
@@ -662,6 +672,7 @@ impl Game {
             GameScreen::HighScores => self.update_high_scores(dt, input),
             GameScreen::HighScoreEntry => self.update_high_score_entry(input),
             GameScreen::ReadThis => self.update_read_this(input),
+            GameScreen::QuitConfirm => self.update_quit_confirm(input),
             GameScreen::LevelSelect => self.update_level_select(input),
             GameScreen::ChangeView => self.update_change_view(input),
             GameScreen::Control => self.update_control(input),
@@ -1216,12 +1227,23 @@ impl Game {
         i as usize
     }
 
+    /// Land a menu cursor on `next`, clicking whenever it actually changes item.
+    /// WL_MENU.C plays MOVEGUN1SND as the gun half-steps between rows and
+    /// MOVEGUN2SND as it arrives (DrawHalfStep / DrawGun); our cursor moves in a
+    /// single frame with no half-step, so only the arrival sound plays.
+    fn cursor_to(&mut self, cur: usize, next: usize) -> usize {
+        if next != cur {
+            self.sounds.push(snd::MOVEGUN2SND as u8);
+        }
+        next
+    }
+
     fn update_main_menu(&mut self, input: &Input) {
         if input.menu_up {
-            self.main_sel = self.move_selectable(self.main_sel, -1);
+            self.main_sel = self.cursor_to(self.main_sel, self.move_selectable(self.main_sel, -1));
         }
         if input.menu_down {
-            self.main_sel = self.move_selectable(self.main_sel, 1);
+            self.main_sel = self.cursor_to(self.main_sel, self.move_selectable(self.main_sel, 1));
         }
         if input.menu_back {
             // Back out of the menu: resume a game in progress, else back to the
@@ -1277,9 +1299,26 @@ impl Game {
                     self.screen = GameScreen::HighScores;
                 }
                 menu::ITEM_BACKTODEMO => self.to_title(),
-                menu::ITEM_QUIT => self.should_quit = true,
+                menu::ITEM_QUIT => {
+                    // CP_Quit: endStrings[(US_RndT()&7) + (US_RndT()&1)], which
+                    // spans all nine taunts.
+                    self.quit_msg =
+                        ((self.menu_rnd.roll() & 7) + (self.menu_rnd.roll() & 1)) as usize;
+                    self.screen = GameScreen::QuitConfirm;
+                }
                 _ => {}
             }
+        }
+    }
+
+    /// CP_Quit's Y/N wait. The frontend maps Y to `menu_enter` and both N and
+    /// Esc to `menu_back`, so the confirmation reads the same as any other
+    /// accept/cancel screen (and the headless `key:` scripts can drive it).
+    fn update_quit_confirm(&mut self, input: &Input) {
+        if input.menu_enter {
+            self.should_quit = true;
+        } else if input.menu_back {
+            self.screen = GameScreen::MainMenu;
         }
     }
 
@@ -1288,10 +1327,10 @@ impl Game {
     fn update_sound(&mut self, input: &Input) {
         const ROWS: usize = 5; // 3 effects rows + 2 music rows
         if input.menu_up {
-            self.sound_sel = (self.sound_sel + ROWS - 1) % ROWS;
+            self.sound_sel = self.cursor_to(self.sound_sel, (self.sound_sel + ROWS - 1) % ROWS);
         }
         if input.menu_down {
-            self.sound_sel = (self.sound_sel + 1) % ROWS;
+            self.sound_sel = self.cursor_to(self.sound_sel, (self.sound_sel + 1) % ROWS);
         }
         if input.menu_back {
             self.screen = GameScreen::MainMenu;
@@ -1401,10 +1440,10 @@ impl Game {
     fn update_load(&mut self, input: &Input) {
         let n = savegame::NUM_SLOTS;
         if input.menu_up {
-            self.ls_sel = (self.ls_sel + n - 1) % n;
+            self.ls_sel = self.cursor_to(self.ls_sel, (self.ls_sel + n - 1) % n);
         }
         if input.menu_down {
-            self.ls_sel = (self.ls_sel + 1) % n;
+            self.ls_sel = self.cursor_to(self.ls_sel, (self.ls_sel + 1) % n);
         }
         if input.menu_back {
             self.screen = GameScreen::MainMenu;
@@ -1450,10 +1489,10 @@ impl Game {
             return;
         }
         if input.menu_up {
-            self.ls_sel = (self.ls_sel + n - 1) % n;
+            self.ls_sel = self.cursor_to(self.ls_sel, (self.ls_sel + n - 1) % n);
         }
         if input.menu_down {
-            self.ls_sel = (self.ls_sel + 1) % n;
+            self.ls_sel = self.cursor_to(self.ls_sel, (self.ls_sel + 1) % n);
         }
         if input.menu_back {
             self.screen = GameScreen::MainMenu;
@@ -1472,6 +1511,12 @@ impl Game {
     pub fn is_text_entry(&self) -> bool {
         (self.screen == GameScreen::SaveGame && self.entering_name)
             || self.screen == GameScreen::HighScoreEntry
+    }
+
+    /// Whether a yes/no prompt is up, so the frontend routes Y/N/Esc to it and
+    /// swallows every other shortcut (CP_Quit's wait loop accepts nothing else).
+    pub fn is_confirm(&self) -> bool {
+        self.screen == GameScreen::QuitConfirm
     }
 
     // --- Save-game serialization (see src/savegame.rs) ---------------------
@@ -1573,10 +1618,12 @@ impl Game {
 
     fn update_episode(&mut self, input: &Input) {
         if input.menu_up {
-            self.episode_sel = (self.episode_sel + menu::NUM_EPISODES - 1) % menu::NUM_EPISODES;
+            let next = (self.episode_sel + menu::NUM_EPISODES - 1) % menu::NUM_EPISODES;
+            self.episode_sel = self.cursor_to(self.episode_sel, next);
         }
         if input.menu_down {
-            self.episode_sel = (self.episode_sel + 1) % menu::NUM_EPISODES;
+            let next = (self.episode_sel + 1) % menu::NUM_EPISODES;
+            self.episode_sel = self.cursor_to(self.episode_sel, next);
         }
         if input.menu_back {
             self.screen = GameScreen::MainMenu;
@@ -1590,10 +1637,12 @@ impl Game {
 
     fn update_difficulty(&mut self, input: &Input) {
         if input.menu_up {
-            self.diff_sel = (self.diff_sel + menu::NUM_DIFFICULTIES - 1) % menu::NUM_DIFFICULTIES;
+            let next = (self.diff_sel + menu::NUM_DIFFICULTIES - 1) % menu::NUM_DIFFICULTIES;
+            self.diff_sel = self.cursor_to(self.diff_sel, next);
         }
         if input.menu_down {
-            self.diff_sel = (self.diff_sel + 1) % menu::NUM_DIFFICULTIES;
+            let next = (self.diff_sel + 1) % menu::NUM_DIFFICULTIES;
+            self.diff_sel = self.cursor_to(self.diff_sel, next);
         }
         if input.menu_back {
             self.screen = if self.variant.has_episodes {
@@ -2022,6 +2071,13 @@ impl Game {
             }
             GameScreen::MainMenu => {
                 self.menu.render_main(fb, self.main_sel, self.started);
+                return;
+            }
+            // CP_Quit draws its Message over the still-visible main menu.
+            GameScreen::QuitConfirm => {
+                self.menu.render_main(fb, self.main_sel, self.started);
+                self.menu
+                    .render_message(fb, menu::END_STRINGS[self.quit_msg]);
                 return;
             }
             GameScreen::Episode => {

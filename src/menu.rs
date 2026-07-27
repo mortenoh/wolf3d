@@ -3,11 +3,12 @@
 //! [`crate::game::Game`] state machine owns the current screen and selection
 //! and drives navigation, so the whole flow is headless-verifiable.
 //!
-//! Colors and layout are the registered WL6 (non-SPEAR) constants from
-//! WL_MENU.H: the screen clears to a medium red (`BORDCOLOR`), the item window
-//! is a darker red (`BKGDCOLOR`) with a bevelled outline, active text is grey
-//! (`TEXTCOLOR`, brighter `HIGHLIGHT` under the gun), and disabled items are the
-//! dark-red `DEACTIVE`.
+//! Layout is the WL_MENU.H constant set: the item window (`BKGDCOLOR`) sits on
+//! the cleared screen (`BORDCOLOR`) with a bevelled outline, active text is grey
+//! (`TEXTCOLOR`, brighter `HIGHLIGHT` under the gun), and disabled items use
+//! `DEACTIVE`. Those five window colors are build-specific — WL6 is red, Spear
+//! of Destiny blue (see [`Colors`]) — and Spear replaces the flat `BORDCOLOR`
+//! clear with a full-screen backdrop picture (ClearMScreen).
 
 use crate::assets::VgaGraph;
 use crate::assets::vgagraph::Picture;
@@ -17,14 +18,55 @@ use crate::font::Font;
 use crate::game::SfxMode;
 use crate::savegame::NUM_SLOTS;
 
-// --- Palette color bytes (WL_MENU.H, non-SPEAR build) ---
-const BORDCOLOR: u8 = 0x29;
-const BORD2COLOR: u8 = 0x23;
-const DEACTIVE: u8 = 0x2b;
-const BKGDCOLOR: u8 = 0x2d;
-const STRIPE: u8 = 0x2c;
+// --- Palette color bytes (WL_MENU.H) ---
+// The greys are shared by both builds; the window colors are not.
 const TEXTCOLOR: u8 = 0x17;
 const HIGHLIGHT: u8 = 0x13;
+
+/// The five menu window colors WL_MENU.H redefines under `SPEAR`. Both sets are
+/// the same ramp in a different hue: WL6 takes the reds at 0x2x, Spear the blues
+/// at 0x9x (the game palette mirrors the two rows shade for shade).
+pub struct Colors {
+    /// The cleared screen behind everything (Spear draws `backdrop` instead).
+    bord: u8,
+    /// Bevel highlight: the bottom/right edge of a window or outline.
+    bord2: u8,
+    /// Greyed-out item text, and the bevel shadow (top/left edge).
+    deactive: u8,
+    /// Window fill under the item lists.
+    bkgd: u8,
+    /// The rule under the black header band (DrawStripes).
+    stripe: u8,
+}
+
+const WL6_COLORS: Colors = Colors {
+    bord: 0x29,
+    bord2: 0x23,
+    deactive: 0x2b,
+    bkgd: 0x2d,
+    stripe: 0x2c,
+};
+
+const SOD_COLORS: Colors = Colors {
+    bord: 0x99,
+    bord2: 0x93,
+    deactive: 0x9b,
+    bkgd: 0x9d,
+    stripe: 0x9c,
+};
+
+impl Colors {
+    /// The color set for a variant — WL_MENU.H's `#ifdef SPEAR` switch.
+    pub const fn for_variant(sod: bool) -> Self {
+        if sod { SOD_COLORS } else { WL6_COLORS }
+    }
+
+    /// The cleared-screen color. Public because the "Get Psyched" load screen
+    /// (inter.rs) paints itself in the menu's border color too.
+    pub const fn bord(&self) -> u8 {
+        self.bord
+    }
+}
 
 // --- Main-menu layout (WL_MENU.H / WL_MENU.C) ---
 const MENU_X: i32 = 76;
@@ -129,6 +171,20 @@ const EPISODE_NAMES: [(&str, &str); NUM_EPISODES] = [
     ("Episode 6", "Confrontation"),
 ];
 
+/// WL_MENU.C `endStrings[]`: the Quit prompt picks one at random. Both builds
+/// use the full set (only the Spanish translation pinned it to the first).
+pub const END_STRINGS: [&str; 9] = [
+    "Dost thou wish to\nleave with such hasty\nabandon?",
+    "Chickening out...\nalready?",
+    "Press N for more carnage.\nPress Y to be a weenie.",
+    "So, you think you can\nquit this easily, huh?",
+    "Press N to save the world.\nPress Y to abandon it in\nits hour of need.",
+    "Press N if you are brave.\nPress Y to cower in shame.",
+    "Heroes, press N.\nWimps, press Y.",
+    "You are at an intersection.\nA sign says, 'Press Y to quit.'\n>",
+    "For guns and glory, press N.\nFor work and worry, press Y.",
+];
+
 /// The skill phrases beneath each BJ mugshot (WL_MENU.C).
 const DIFFICULTY_NAMES: [&str; NUM_DIFFICULTIES] = [
     "Can I play, Daddy?",
@@ -156,6 +212,11 @@ pub struct Menu {
     ls_titles: [Picture; 2],
     /// The attract-loop credits page (CREDITSPIC).
     credits: Picture,
+    /// Spear's full-screen menu backdrop (C_BACKDROPPIC); `None` on WL6, which
+    /// clears to a flat `Colors::bord` instead.
+    backdrop: Option<Picture>,
+    /// The variant's window colors (red on WL6, blue on Spear).
+    colors: Colors,
     /// Cursor animation clock, in seconds.
     blink: f32,
 }
@@ -192,6 +253,8 @@ impl Menu {
             sound_titles: [vga.pic(gfx.fx_title), vga.pic(gfx.music_title)],
             ls_titles: [vga.pic(gfx.load_game), vga.pic(gfx.save_game)],
             credits: vga.pic(gfx.credits),
+            backdrop: gfx.backdrop.map(|c| vga.pic(c)),
+            colors: Colors::for_variant(variant.is_sod()),
             blink: 0.0,
         }
     }
@@ -237,19 +300,19 @@ impl Menu {
         self.font.draw(fb, 8, 4, "DEMO", color);
     }
 
-    /// The main menu: red backdrop, Options header, the item window and the
-    /// grey/greyed item list with the gun cursor on `selected`.
+    /// The main menu: the cleared backdrop, Options header, the item window and
+    /// the grey/greyed item list with the gun cursor on `selected`.
     pub fn render_main(&self, fb: &mut Framebuffer, selected: usize, started: bool) {
-        clear(fb, BORDCOLOR);
-        draw_stripes(fb, 10);
+        self.clear_mscreen(fb);
+        self.draw_stripes(fb, 10);
         blit(fb, &self.options, 84, 0);
-        draw_window(fb, MENU_X - 8, MENU_Y - 3, MENU_W, MENU_H, BKGDCOLOR);
+        self.draw_window(fb, MENU_X - 8, MENU_Y - 3, MENU_W, MENU_H, self.colors.bkgd);
 
         for (i, item) in MAIN_ITEMS.iter().enumerate() {
             // Save Game greys out until a game is in progress.
             let active = item.active && (i != ITEM_SAVE || started);
             let color = if !active {
-                DEACTIVE
+                self.colors.deactive
             } else if i == selected {
                 HIGHLIGHT
             } else {
@@ -268,8 +331,8 @@ impl Menu {
 
     /// Episode select: the six C_EPISODE banners stacked, gun on `selected`.
     pub fn render_episode(&self, fb: &mut Framebuffer, selected: usize) {
-        clear(fb, BORDCOLOR);
-        draw_stripes(fb, 0);
+        self.clear_mscreen(fb);
+        self.draw_stripes(fb, 0);
         self.font
             .draw_centered(fb, 3, "Which episode to play?", HIGHLIGHT);
 
@@ -291,8 +354,8 @@ impl Menu {
     /// skill's BJ banner (the original cycles one banner at a time, its face
     /// hardening with the skill).
     pub fn render_difficulty(&self, fb: &mut Framebuffer, selected: usize) {
-        clear(fb, BORDCOLOR);
-        draw_stripes(fb, 10);
+        self.clear_mscreen(fb);
+        self.draw_stripes(fb, 10);
         self.font
             .draw_centered(fb, 68, "How tough are you?", HIGHLIGHT);
 
@@ -322,13 +385,20 @@ impl Menu {
         music_on: bool,
         selected: usize,
     ) {
-        clear(fb, BORDCOLOR);
-        draw_stripes(fb, 10);
+        self.clear_mscreen(fb);
+        self.draw_stripes(fb, 10);
 
         // Effects group: 3 rows.
         let sfx_labels = ["Digitized + AdLib", "AdLib only", "None"];
         let sfx_active = sfx as usize; // matches SfxMode ordering
-        draw_window(fb, SM_X - 8, SM_Y1 - 3, SM_W, 3 * ITEM_STEP + 2, BKGDCOLOR);
+        self.draw_window(
+            fb,
+            SM_X - 8,
+            SM_Y1 - 3,
+            SM_W,
+            3 * ITEM_STEP + 2,
+            self.colors.bkgd,
+        );
         blit(fb, &self.sound_titles[0], 100, SM_Y1 - 18);
         for (i, label) in sfx_labels.iter().enumerate() {
             let row = i;
@@ -339,7 +409,14 @@ impl Menu {
         // Music group: 2 rows.
         let music_labels = ["AdLib", "None"];
         let music_active = if music_on { 0 } else { 1 };
-        draw_window(fb, SM_X - 8, SM_Y2 - 3, SM_W, 2 * ITEM_STEP + 2, BKGDCOLOR);
+        self.draw_window(
+            fb,
+            SM_X - 8,
+            SM_Y2 - 3,
+            SM_W,
+            2 * ITEM_STEP + 2,
+            self.colors.bkgd,
+        );
         blit(fb, &self.sound_titles[1], 100, SM_Y2 - 18);
         for (j, label) in music_labels.iter().enumerate() {
             let row = 3 + j;
@@ -354,6 +431,37 @@ impl Menu {
             SM_Y2 + (selected - 3) as i32 * ITEM_STEP
         };
         blit(fb, self.cursor_frame(), SM_X & !7, cy);
+    }
+
+    /// WL_MENU.C `Message`: a grey box of black text centered on screen, drawn
+    /// over whatever screen is already there (the Quit prompt sits on the main
+    /// menu). The box is filled in TEXTCOLOR and then outlined black on top /
+    /// left, TEXTCOLOR on bottom / right — so only the top-left bevel shows.
+    pub fn render_message(&self, fb: &mut Framebuffer, text: &str) {
+        let fh = self.font.height() as i32;
+        let widths: Vec<i32> = text
+            .split('\n')
+            .map(|l| self.font.text_width(l) as i32)
+            .collect();
+        let h = fh * widths.len() as i32;
+
+        // Message() folds the running width into `mw` at each newline but pads
+        // only the final line by 10, so a trailing longest line widens the box.
+        let (last, rest) = widths.split_last().expect("split always yields a line");
+        let mw = rest.iter().copied().max().unwrap_or(0).max(last + 10);
+
+        // PrintX = 160 - mw/2, PrintY = WindowH/2 - h/2 (WindowH is 200 here).
+        let x = 160 - mw / 2;
+        let y = HEIGHT as i32 / 2 - h / 2;
+        bar(fb, x - 5, y - 5, mw + 10, h + 10, TEXTCOLOR);
+        hlin(fb, x - 5, x + mw + 5, y - 5, 0);
+        vlin(fb, y - 5, y + h + 5, x - 5, 0);
+        hlin(fb, x - 5, x + mw + 5, y + h + 5, TEXTCOLOR);
+        vlin(fb, y - 5, y + h + 5, x + mw + 5, TEXTCOLOR);
+
+        for (i, line) in text.split('\n').enumerate() {
+            self.font.draw(fb, x, y + i as i32 * fh, line, 0);
+        }
     }
 
     /// One radio row: the (un)filled bullet, then the label, highlighted when
@@ -373,7 +481,7 @@ impl Menu {
     /// 10 floor rows in the house menu style; the selected map's name shows
     /// under the grid.
     pub fn render_level_select(&self, fb: &mut Framebuffer, names: &[String], selected: usize) {
-        clear(fb, BORDCOLOR);
+        self.clear_mscreen(fb);
         self.font
             .draw_centered(fb, 4, "Warp to which level?", HIGHLIGHT);
 
@@ -381,13 +489,13 @@ impl Menu {
         const GRID_Y: i32 = 24;
         const COL_W: i32 = 42;
         const ROW_H: i32 = 14;
-        draw_window(
+        self.draw_window(
             fb,
             GRID_X - 8,
             GRID_Y - 3,
             6 * COL_W + 10,
             11 * ROW_H + 2,
-            BKGDCOLOR,
+            self.colors.bkgd,
         );
 
         for ep in 0..6i32 {
@@ -400,7 +508,7 @@ impl Menu {
                 let sel = idx == selected;
                 if sel {
                     // A highlight bar behind the selected cell.
-                    draw_window(fb, x - 3, y - 2, COL_W - 6, ROW_H - 2, STRIPE);
+                    self.draw_window(fb, x - 3, y - 2, COL_W - 6, ROW_H - 2, self.colors.stripe);
                 }
                 let label = match floor {
                     8 => "Boss".to_string(),
@@ -422,7 +530,7 @@ impl Menu {
     /// the size step and the arrow controls.
     pub fn render_change_view(&self, fb: &mut Framebuffer, view_w: usize) {
         bar(fb, 0, 0, WIDTH as i32, 22, 0);
-        hlin(fb, 0, WIDTH as i32 - 1, 22, STRIPE);
+        hlin(fb, 0, WIDTH as i32 - 1, 22, self.colors.stripe);
         self.font
             .draw_centered(fb, 2, "Change View - Left / Right to size", HIGHLIGHT);
         let size = view_w / 16; // 4..=20 (original's ChangeView units)
@@ -438,18 +546,18 @@ impl Menu {
     /// (0..=20) with a footer that documents the play shortcuts. Full key
     /// rebinding is intentionally out of scope.
     pub fn render_control(&self, fb: &mut Framebuffer, sensitivity: usize) {
-        clear(fb, BORDCOLOR);
-        draw_stripes(fb, 10);
+        self.clear_mscreen(fb);
+        self.draw_stripes(fb, 10);
         self.font.draw_centered(fb, 34, "CONTROL", HIGHLIGHT);
 
-        draw_window(fb, 40, 58, 240, 44, BKGDCOLOR);
+        self.draw_window(fb, 40, 58, 240, 44, self.colors.bkgd);
         self.font.draw(fb, 52, 64, "Mouse Sensitivity", TEXTCOLOR);
 
         // Slider track (0..=20) with a highlight knob.
         let track_x = 52;
         let track_y = 84;
         let track_w = 190;
-        bar(fb, track_x, track_y, track_w, 4, DEACTIVE);
+        bar(fb, track_x, track_y, track_w, 4, self.colors.deactive);
         let knob = track_x + sensitivity as i32 * (track_w - 6) / MAX_MOUSE_SENS as i32;
         bar(fb, knob, track_y - 4, 6, 12, HIGHLIGHT);
         self.font.draw(
@@ -467,8 +575,12 @@ impl Menu {
             "Left / Right adjust  -  Enter / Esc accepts",
             TEXTCOLOR,
         );
-        self.font
-            .draw_centered(fb, fy + 13, "Key rebinding not available", DEACTIVE);
+        self.font.draw_centered(
+            fb,
+            fy + 13,
+            "Key rebinding not available",
+            self.colors.deactive,
+        );
         self.font.draw_centered(
             fb,
             fy + 30,
@@ -508,16 +620,16 @@ impl Menu {
         entering: bool,
         name: &str,
     ) {
-        clear(fb, BORDCOLOR);
-        draw_stripes(fb, 10);
+        self.clear_mscreen(fb);
+        self.draw_stripes(fb, 10);
         blit(fb, header, 84, 0);
-        draw_window(fb, LSM_X - 8, LSM_Y - 3, LSM_W, LSM_H, BKGDCOLOR);
+        self.draw_window(fb, LSM_X - 8, LSM_Y - 3, LSM_W, LSM_H, self.colors.bkgd);
 
         let box_x = LSM_X + 16;
         let box_w = LSM_W - 16 - 15;
         for i in 0..NUM_SLOTS {
             let y = LSM_Y + i as i32 * ITEM_STEP;
-            draw_outline(fb, box_x, y, box_w, 11);
+            self.draw_outline(fb, box_x, y, box_w, 11);
             let filled = slots.get(i).and_then(Option::as_ref).is_some();
             let editing = entering && i == selected;
             let text = if editing {
@@ -532,7 +644,7 @@ impl Menu {
             } else if filled {
                 TEXTCOLOR
             } else {
-                DEACTIVE
+                self.colors.deactive
             };
             self.font.draw(fb, box_x + 3, y + 2, &text, color);
         }
@@ -547,36 +659,38 @@ impl Menu {
 
 // --- Primitives (VWB_Bar / VWB_Hlin / VWB_Vlin / VWB_DrawPic) -------------
 
-/// Fill the whole framebuffer with a palette color.
-fn clear(fb: &mut Framebuffer, color: u8) {
-    let rgba = vgagraph_color(color);
-    fb.pixels.fill(rgba);
-}
+impl Menu {
+    /// ClearMScreen: WL6 bars the screen in `bord`, Spear draws C_BACKDROPPIC
+    /// over the whole 320x200 instead (its blue marbled menu background).
+    fn clear_mscreen(&self, fb: &mut Framebuffer) {
+        match &self.backdrop {
+            Some(pic) => blit(fb, pic, 0, 0),
+            None => fb.pixels.fill(vgagraph_color(self.colors.bord)),
+        }
+    }
 
-/// DrawStripes: a 320x24 black bar at `y` with a STRIPE-colored rule near its
-/// bottom (the black header band behind the menu art).
-fn draw_stripes(fb: &mut Framebuffer, y: i32) {
-    bar(fb, 0, y, 320, 24, 0);
-    hlin(fb, 0, 319, y + 22, STRIPE);
-}
+    /// DrawStripes: a 320x24 black bar at `y` with a `stripe`-colored rule near
+    /// its bottom (the black header band behind the menu art).
+    fn draw_stripes(&self, fb: &mut Framebuffer, y: i32) {
+        bar(fb, 0, y, 320, 24, 0);
+        hlin(fb, 0, 319, y + 22, self.colors.stripe);
+    }
 
-/// DrawWindow: a filled rectangle with a bevelled DrawOutline (top/left in the
-/// darker DEACTIVE, bottom/right in the brighter BORD2COLOR).
-fn draw_window(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32, color: u8) {
-    bar(fb, x, y, w, h, color);
-    hlin(fb, x, x + w, y, DEACTIVE);
-    vlin(fb, y, y + h, x, DEACTIVE);
-    hlin(fb, x, x + w, y + h, BORD2COLOR);
-    vlin(fb, y, y + h, x + w, BORD2COLOR);
-}
+    /// DrawWindow: a filled rectangle with a bevelled DrawOutline.
+    fn draw_window(&self, fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32, color: u8) {
+        bar(fb, x, y, w, h, color);
+        self.draw_outline(fb, x, y, w, h);
+    }
 
-/// A bevelled empty box outline (DrawOutline) for the save-slot cells: top/left
-/// in the darker DEACTIVE, bottom/right in the brighter BORD2COLOR.
-fn draw_outline(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32) {
-    hlin(fb, x, x + w, y, DEACTIVE);
-    vlin(fb, y, y + h, x, DEACTIVE);
-    hlin(fb, x, x + w, y + h, BORD2COLOR);
-    vlin(fb, y, y + h, x + w, BORD2COLOR);
+    /// A bevelled empty box outline (DrawOutline), also used bare for the
+    /// save-slot cells: top/left in the darker `deactive`, bottom/right in the
+    /// brighter `bord2`.
+    fn draw_outline(&self, fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32) {
+        hlin(fb, x, x + w, y, self.colors.deactive);
+        vlin(fb, y, y + h, x, self.colors.deactive);
+        hlin(fb, x, x + w, y + h, self.colors.bord2);
+        vlin(fb, y, y + h, x + w, self.colors.bord2);
+    }
 }
 
 fn bar(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32, color: u8) {

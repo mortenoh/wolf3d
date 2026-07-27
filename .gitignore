@@ -1,3 +1,5 @@
 /target
 /data
 /saves
+# Headless demo snapshots (`make demo`).
+/snaps

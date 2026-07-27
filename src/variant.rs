@@ -33,6 +33,9 @@ pub struct Gfx {
     /// means the title uses the standard game palette (WL6).
     pub title_palette: Option<usize>,
     pub credits: usize,
+    /// Full-screen menu backdrop (C_BACKDROPPIC). SOD only: WL_MENU.C's
+    /// ClearMScreen draws it under SPEAR where WL6 bars a flat BORDCOLOR.
+    pub backdrop: Option<usize>,
     pub options: usize,
     pub cursor1: usize,
     pub cursor2: usize,
@@ -70,6 +73,7 @@ const GFX_WL6: Gfx = Gfx {
     title2: None,
     title_palette: None,
     credits: 89,
+    backdrop: None,
     options: 10,
     cursor1: 11,
     cursor2: 12,
@@ -103,6 +107,7 @@ const GFX_SOD: Gfx = Gfx {
     title2: Some(80),
     title_palette: Some(153), // TITLEPALETTE (GFXV_SOD.H)
     credits: 92,
+    backdrop: Some(3), // C_BACKDROPPIC (GFXV_SOD.H)
     options: 16,
     cursor1: 5,
     cursor2: 6,

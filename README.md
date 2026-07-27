@@ -14,7 +14,8 @@ released source.
   Angel of Death, and the E3M10 ghosts
 - Sliding doors, locked doors and keys, secret push-walls, pickups
 - The complete menu system: episode/difficulty select, sound options,
-  save/load with named slots, Change View, Read This!, high scores
+  save/load with named slots, Change View, Read This!, high scores, and the
+  random Y/N Quit taunt
 - Sound: digitized effects plus AdLib music and effects through OPL2 emulation
   (nuked-opl3)
 - Floor-completed intermission with ratio bonuses, deathcam, victory sequence,
@@ -29,12 +30,31 @@ No copyrighted game data is included. Buy Wolfenstein 3D + Spear of Destiny
 `data/Wolfenstein.3D.and.Spear.of.Destiny-GOG/`, then:
 
 ```
-brew install innoextract
-make data        # extracts the .WL6 files
-make run         # play Wolfenstein 3D
-make data-sod    # extracts Spear of Destiny (M1 campaign)
-make run-sod     # play Spear of Destiny
+brew install innoextract          # apt install innoextract on Linux
+make data                         # extracts the .WL6 files
+make run                          # play Wolfenstein 3D
+make data-sod                     # extracts Spear of Destiny (M1 campaign)
+make run-sod                      # play Spear of Destiny
 ```
+
+The run targets extract the data first, so `make run` on a fresh checkout is
+enough. On Linux, cpal's ALSA backend also needs the system headers
+(`apt install libasound2-dev`).
+
+## Building and developing
+
+`make` (or `make help`) lists every target. The ones you want:
+
+```
+make build-release   # build the optimized binary
+make test            # run the test suite (needs the extracted data)
+make ci              # fmt-check + clippy + release build + test compile
+make fmt             # format the source
+make clean           # cargo clean (clean-data/clean-saves/distclean also exist)
+```
+
+`make run LEVEL=5` starts on a given level, and `make record OUT=demos/x.dm`
+captures a play session as an attract demo.
 
 ## Controls
 
@@ -49,7 +69,14 @@ The simulation is deterministic and window-independent. `WOLF3D_DEMO` plays a
 scripted input sequence at the original 70 Hz tic rate with no window and dumps
 framebuffer snapshots (see `src/demo.rs`); the test suite uses the same path to
 prove things like "the first door of E1M1 opens" and "Hitler dies and sets the
-victory flag". `cargo test` requires the extracted game data.
+victory flag". `make test` requires the extracted game data (the Spear of
+Destiny tests skip themselves when `data/VSWAP.SOD` is absent).
+
+To drive it by hand:
+
+```
+make demo SCRIPT='w:1;use;wait:1;snap:door'   # snapshots land in snaps/
+```
 
 ## Provenance and license
 

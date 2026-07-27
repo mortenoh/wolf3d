@@ -4,7 +4,7 @@
 
 use wolf3d::assets::audio::{AudioData, NUM_MUSIC, NUM_SOUNDS};
 use wolf3d::assets::{VSwap, data_dir};
-use wolf3d::game::{Game, Input};
+use wolf3d::game::{Game, GameScreen, Input};
 use wolf3d::sound::{self, Engine, SoundAssets};
 
 const DT: f32 = 1.0 / 70.0;
@@ -175,6 +175,54 @@ fn digitized_effect_renders_sound() {
     let peak = buf.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
     assert!(peak > 0.05, "digitized pistol is silent, peak = {peak}");
     assert_eq!(sound::checksum(&buf), 0x047d_36d2_b320_6bad);
+}
+
+/// The gun cursor clicks on every menu move (WL_MENU.C DrawGun) but stays quiet
+/// when a key press leaves it on the same item.
+#[test]
+fn menu_cursor_move_emits_sound() {
+    let mut game = Game::new(0);
+    game.to_title();
+    // Any key on the title screen opens the main menu.
+    game.update(
+        DT,
+        &Input {
+            any_key: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(game.screen, GameScreen::MainMenu);
+    let _ = game.take_sounds();
+
+    let before = game.main_sel;
+    game.update(
+        DT,
+        &Input {
+            menu_down: true,
+            ..Default::default()
+        },
+    );
+    assert_ne!(game.main_sel, before, "the cursor should have moved");
+    assert_eq!(
+        game.take_sounds(),
+        vec![sound::MOVEGUN2SND as u8],
+        "moving down the main menu clicks once"
+    );
+
+    // An idle tic (no menu key) is silent.
+    game.update(DT, &Input::default());
+    assert!(game.take_sounds().is_empty(), "an idle menu tic is silent");
+}
+
+/// The cursor click is audible: MOVEGUN2SND has to resolve to a real effect in
+/// the shipped data, not silently fall through the engine's asset lookups.
+#[test]
+fn menu_cursor_sound_renders() {
+    let mut e = Engine::new(44_100, load_assets());
+    e.play_sound(sound::MOVEGUN2SND as u8);
+    let buf = sound::render_offline(&mut e, 0.5);
+    let peak = buf.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+    assert!(peak > 0.02, "menu cursor sound is silent, peak = {peak}");
 }
 
 #[test]

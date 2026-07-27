@@ -23,8 +23,6 @@ pub const PAR_AMOUNT: i32 = 500;
 pub const PERCENT100AMT: i32 = 10000;
 /// WL_INTER.C `VWB_Bar(0,0,320,200-STATUSLINES,127)`: the intermission backdrop.
 const VIEWCOLOR: u8 = 127;
-/// The menu red backdrop for the load screen (WL_MENU.H `BORDCOLOR`).
-const BORDCOLOR: u8 = 0x29;
 
 /// WL_GAME.C / WL_INTER.C `parTimes[]`: par time per level in minutes, indexed by
 /// `episode*10 + floor` (the overall map index). Boss (floor 9) and secret
@@ -263,11 +261,16 @@ pub struct InterGfx {
     psyched: Picture,
     bjwin: Picture,
     highscores: Picture,
+    /// The load screen paints itself in the menu's border color, so it follows
+    /// the variant (red on WL6, blue on Spear).
+    bord: u8,
 }
 
 impl InterGfx {
-    pub fn new(vga: &VgaGraph, gfx: &crate::variant::Gfx) -> Self {
+    pub fn new(vga: &VgaGraph, variant: &crate::variant::Variant) -> Self {
+        let gfx = &variant.gfx;
         Self {
+            bord: crate::menu::Colors::for_variant(variant.is_sod()).bord(),
             font: Font::load(vga, 0),
             guy: [vga.pic(gfx.l_guy), vga.pic(gfx.l_guy2)],
             nums: (0..10).map(|d| vga.pic(gfx.l_num0 + d)).collect(),
@@ -380,10 +383,11 @@ impl InterGfx {
         }
     }
 
-    /// The "Get Psyched!" load screen: the menu-red backdrop, the GETPSYCHED art
-    /// centered, and a progress strip that fills as the (instant) load "runs".
+    /// The "Get Psyched!" load screen: the menu border backdrop, the GETPSYCHED
+    /// art centered, and a progress strip that fills as the (instant) load
+    /// "runs".
     pub fn render_get_psyched(&self, fb: &mut Framebuffer, progress: f32) {
-        fill(fb, BORDCOLOR);
+        fill(fb, self.bord);
         let px = (WIDTH as i32 - self.psyched.width as i32) / 2;
         let py = HEIGHT as i32 / 2 - self.psyched.height as i32 / 2;
         blit(fb, &self.psyched, px, py);

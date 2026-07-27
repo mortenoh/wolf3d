@@ -121,15 +121,26 @@ const RND_TABLE: [u8; 256] = [
 ];
 
 /// Deterministic table-based RNG; `US_InitRndT(false)` seeds the index to 0.
-struct Rnd {
+///
+/// Every consumer gets its own stream so that cosmetic rolls (sound choice, the
+/// Quit prompt's message) can never perturb the gameplay stream the
+/// deterministic tests depend on.
+pub struct Rnd {
     index: usize,
 }
+impl Default for Rnd {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Rnd {
-    fn new() -> Self {
+    /// `US_InitRndT(false)`: the deterministic seed, index 0.
+    pub fn new() -> Self {
         Self { index: 0 }
     }
     /// US_RndT: advance the index and return the next byte (0..=255).
-    fn roll(&mut self) -> u32 {
+    pub fn roll(&mut self) -> u32 {
         self.index = (self.index + 1) & 0xff;
         RND_TABLE[self.index] as u32
     }

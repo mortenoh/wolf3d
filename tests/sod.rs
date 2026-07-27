@@ -9,7 +9,8 @@
 
 use wolf3d::actors::Kind;
 use wolf3d::assets::{MapSet, VSwap, VgaGraph, data_dir};
-use wolf3d::game::{Game, Input, WEAPON_CHAINGUN};
+use wolf3d::fb::Framebuffer;
+use wolf3d::game::{Game, GameScreen, Input, WEAPON_CHAINGUN};
 use wolf3d::variant::Variant;
 
 const DT: f32 = 1.0 / 70.0;
@@ -233,5 +234,64 @@ fn sod_killing_the_angel_wins() {
     assert!(
         won,
         "the Angel of Death should die and set the victory flag"
+    );
+}
+
+/// The Spear menu is blue, not WL6's red: WL_MENU.H swaps the 0x2x red window
+/// ramp for the 0x9x blue one, and ClearMScreen paints C_BACKDROPPIC over the
+/// whole screen instead of a flat BORDCOLOR fill.
+#[test]
+fn sod_menu_is_blue() {
+    if !sod_present() {
+        return;
+    }
+    let blue_share = |mut game: Game| {
+        game.to_title();
+        game.update(
+            DT,
+            &Input {
+                any_key: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(game.screen, GameScreen::MainMenu);
+        let mut fb = Framebuffer::new();
+        game.render(&mut fb);
+        let blue = fb
+            .pixels
+            .iter()
+            .filter(|&&p| (p >> 16) & 0xff > p & 0xff)
+            .count();
+        blue as f32 / fb.pixels.len() as f32
+    };
+
+    // Most of the Spear menu is blue; almost none of the WL6 one is (its reds
+    // invert the comparison, leaving only the grey text and black band).
+    let sod = blue_share(sod_game(0));
+    let wl6 = blue_share(Game::new(0));
+    assert!(
+        sod > 0.8,
+        "the Spear menu should be mostly blue, got {sod:.2}"
+    );
+    assert!(wl6 < 0.05, "the WL6 menu should stay red, got {wl6:.2}");
+
+    // The backdrop is a real picture, not a flat fill: it has more than the
+    // handful of distinct colors a bar-and-window screen would produce.
+    let mut game = sod_game(0);
+    game.to_title();
+    game.update(
+        DT,
+        &Input {
+            any_key: true,
+            ..Default::default()
+        },
+    );
+    let mut fb = Framebuffer::new();
+    game.render(&mut fb);
+    let distinct: std::collections::HashSet<u32> = fb.pixels.iter().copied().collect();
+    assert!(
+        distinct.len() > 16,
+        "C_BACKDROPPIC should be a textured picture, got {} colors",
+        distinct.len()
     );
 }

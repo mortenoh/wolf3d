@@ -637,6 +637,15 @@ impl ApplicationHandler for App {
                                 }
                             }
                         }
+                    } else if event.state.is_pressed() && !event.repeat && self.game.is_confirm() {
+                        // CP_Quit's wait loop takes Y / N / Esc and nothing
+                        // else. Y reads as accept and N/Esc as cancel, so the
+                        // game side needs no separate yes/no inputs.
+                        match code {
+                            KeyCode::KeyY => self.menu_enter = true,
+                            KeyCode::KeyN | KeyCode::Escape => self.menu_back = true,
+                            _ => {}
+                        }
                     } else if event.state.is_pressed() && !event.repeat {
                         let playing = self.game.screen == GameScreen::Playing;
                         // Any key-down advances the title screen.
