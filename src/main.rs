@@ -882,7 +882,7 @@ enum Command {
         threads: Option<usize>,
 
         /// Soft max seconds per trial.
-        #[arg(long = "max-secs", default_value_t = 120.0)]
+        #[arg(long = "max-secs", default_value_t = 300.0)]
         max_secs: f32,
 
         /// Progress log every N trials (default: iters/25).

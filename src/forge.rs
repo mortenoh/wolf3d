@@ -40,7 +40,7 @@ impl Default for ForgeOptions {
             out_dir: PathBuf::from("demos"),
             iters: 50_000,
             threads,
-            max_secs: 120.0,
+            max_secs: 300.0,
             progress_every: 0, // filled in run() if 0
             search_seed: None,
             god: false,
@@ -217,6 +217,18 @@ fn generate_one(
     let name = level_name(level_idx);
     let path_out = out_dir.join(format!("{}.dm", name));
 
+    // Secrets-first pins every candidate to seek_secrets/no-kill-hunting. On a
+    // floor with nothing to find that only handicaps the search: the AI combs
+    // for secrets that do not exist and declines the fights it must win to
+    // reach the exit (E3M10's ghosts being the worst case). Rank by score there.
+    let mut game = Game::new(level_idx);
+    let focus = if focus == SearchFocus::Secrets && game.stats.secret_total == 0 {
+        println!("  {name}  focus: score (map has no secrets)");
+        SearchFocus::Score
+    } else {
+        focus
+    };
+
     let warm = load_warm_start(level_idx, &path_out, god, focus);
     if let Some(ref w) = warm {
         println!(
@@ -231,7 +243,6 @@ fn generate_one(
     }
     let _ = std::io::stdout().flush();
 
-    let mut game = Game::new(level_idx);
     let mut best = warm.clone().unwrap_or_else(|| {
         let mut policy = Policy::full_clear(search_seed as u32);
         configure_policy(&mut policy, god, focus);

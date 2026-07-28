@@ -84,7 +84,7 @@ play-demo: data ## Replay a .dm attract demo (DEMO=e1m1 or demos/e1m1.dm; HEADLE
 # AI demo forge via `wolf3d forge`. Example: make gen-demo LEVEL=0 ITERS=1000000
 ITERS    ?= 50000
 THREADS  ?=
-MAX_SECS ?= 120
+MAX_SECS ?= 300
 SEARCH_SEED ?=
 GOD      ?=
 FOCUS    ?= secrets
