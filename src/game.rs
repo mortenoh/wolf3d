@@ -32,7 +32,8 @@ const BACK_RUN_SPEED: f32 = 70.0 * 100.0 * 70.0 / 65536.0; // ~7.48 tiles/s
 // BASETURN=35 / RUNTURN=70 units per tic, ANGLESCALE=20, ANGLES=360.
 /// Walk turn rate (rad/s); used by headless demo scripts for degree holds.
 pub const TURN_SPEED: f32 = (35.0 / 20.0) * (std::f32::consts::TAU / 360.0) * 70.0;
-const TURN_RUN: f32 = (70.0 / 20.0) * (std::f32::consts::TAU / 360.0) * 70.0;
+/// Run turn rate (rad/s); the AI sizes its aim deadband from this.
+pub const TURN_RUN: f32 = (70.0 / 20.0) * (std::f32::consts::TAU / 360.0) * 70.0;
 
 /// One frame's worth of player intent.
 #[derive(Default, Clone, Copy)]

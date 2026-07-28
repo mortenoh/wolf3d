@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::actors::Kind;
 use crate::demorec::{AiPolicy as RecordedAiPolicy, Demo};
-use crate::game::{Game, GameScreen, Input, TIC, WEAPON_CHAINGUN};
+use crate::game::{Game, GameScreen, Input, TIC, TURN_RUN, TURN_SPEED, WEAPON_CHAINGUN};
 use crate::hud::{KEY_GOLD, KEY_SILVER};
 use crate::raycast::{Bonus, World};
 
@@ -384,6 +384,9 @@ pub struct Brain {
     path_stale: u32,
     /// When true, combat is more aggressive (in-game `I` assist).
     assist: bool,
+    /// Last commanded turn direction, for the reversal hysteresis in
+    /// [`Brain::turn_flags`]. Sticky: a held heading keeps the old sign.
+    turn_dir: i8,
 }
 
 impl Brain {
@@ -420,6 +423,7 @@ impl Brain {
             last_path_i: 0,
             path_stale: 0,
             assist,
+            turn_dir: 0,
         };
         brain.pick_goal(game);
         brain.replan(game);
@@ -835,6 +839,35 @@ impl Brain {
         }
     }
 
+    /// Turn flags for a heading correction of `turn` radians.
+    ///
+    /// One tic sweeps 0.031 rad walking and 0.061 running, both at or above the
+    /// 0.02 rad aim band, so a nearly-aligned bot overshot to the far side and
+    /// corrected straight back. 91% of recorded turn bursts were a single tic
+    /// and the replayed view shook several degrees at up to 70 Hz. Reversing
+    /// now costs more than one tic's sweep of error, which breaks the limit
+    /// cycle while leaving same-direction aim exactly as precise as before.
+    fn turn_flags(&mut self, turn: f32, run: bool) -> (bool, bool) {
+        let step = TIC * if run { TURN_RUN } else { TURN_SPEED };
+        let want = if turn < -0.02 {
+            -1
+        } else if turn > 0.02 {
+            1
+        } else {
+            0
+        };
+        // Hold instead of flipping back over an error one tic could not clear.
+        let dir = if want == -self.turn_dir && turn.abs() < step {
+            0
+        } else {
+            want
+        };
+        if dir != 0 {
+            self.turn_dir = dir;
+        }
+        (dir < 0, dir > 0)
+    }
+
     fn tick_open_door(&mut self, game: &Game, dx: i32, dy: i32) -> Input {
         if door_passable(&game.world, dx, dy) {
             self.open_door = None;
@@ -842,11 +875,12 @@ impl Brain {
             // Immediately step through so the door can't close on us.
             let want = ((dy as f32 + 0.5) - game.player.y).atan2((dx as f32 + 0.5) - game.player.x);
             let turn = norm_angle(want - game.player.angle);
+            let (turn_left, turn_right) = self.turn_flags(turn, true);
             return Input {
                 forward: turn.abs() < 0.7,
                 run: true,
-                turn_left: turn < -0.02,
-                turn_right: turn > 0.02,
+                turn_left,
+                turn_right,
                 ..Default::default()
             };
         }
@@ -868,10 +902,11 @@ impl Brain {
         }
         // Once the slab is half-open, press into it (less idle chip damage).
         let press = pos > 0.45 && turn.abs() < 0.6;
+        let (turn_left, turn_right) = self.turn_flags(turn, press);
         Input {
             use_door: tap,
-            turn_left: turn < -0.02,
-            turn_right: turn > 0.02,
+            turn_left,
+            turn_right,
             forward: press,
             run: press,
             ..Default::default()
@@ -926,12 +961,13 @@ impl Brain {
         let panic = game.health < self.policy.panic_health;
         let combat_aligned = turn.abs() < 0.5;
         let dry = game.ammo == 0;
+        let combat_turn = self.turn_flags(turn, combat_aligned);
         Some(Input {
             // With the knife selected, close and swing. The old shared ammo
             // gate selected the knife but could never actually attack with it.
             fire: aim_ok && (!dry || dist < 1.7),
-            turn_left: turn < -0.02,
-            turn_right: turn > 0.02,
+            turn_left: combat_turn.0,
+            turn_right: combat_turn.1,
             back: !dry && dist < if panic { 4.5 } else { 2.8 },
             forward: if dry {
                 dist > 1.1 && aim_ok
@@ -1046,9 +1082,10 @@ impl Brain {
         if dist < 4.0 || self.path_i >= self.path.len() {
             let want = ((ty as f32 + 0.5) - game.player.y).atan2((tx as f32 + 0.5) - game.player.x);
             let turn = norm_angle(want - game.player.angle);
+            let (turn_left, turn_right) = self.turn_flags(turn, true);
             return Input {
-                turn_left: turn < -0.02,
-                turn_right: turn > 0.02,
+                turn_left,
+                turn_right,
                 forward: turn.abs() < 0.35 && dist > 1.8,
                 back: dist < 1.2 && game.ammo > 0,
                 run: true,
@@ -1283,13 +1320,15 @@ impl Brain {
 
         let want = dy.atan2(dx);
         let turn = norm_angle(want - game.player.angle);
+        let running = turn.abs() < 0.50;
+        let (turn_left, turn_right) = self.turn_flags(turn, running);
         let mut input = Input {
-            turn_left: turn < -0.02,
-            turn_right: turn > 0.02,
+            turn_left,
+            turn_right,
             // Turn in place for genuinely sharp corners; a player can steer
             // through ordinary bends, but only runs once reasonably aligned.
             forward: turn.abs() < 0.85,
-            run: turn.abs() < 0.50,
+            run: running,
             ..Default::default()
         };
         if self.stuck > 10 {
