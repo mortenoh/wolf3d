@@ -97,8 +97,8 @@ gen-demos: data ## AI-search fair demos for every WL6 floor (wolf3d forge)
 		$(if $(SEARCH_SEED),--search-seed $(SEARCH_SEED)) \
 		$(if $(filter 1,$(GOD)),--god) --focus $(FOCUS)
 
-gen-demos-full: ITERS = 400000
-gen-demos-full: data ## Full 400k/floor forge run, logged under logs/
+gen-demos-full: ITERS = 200000
+gen-demos-full: data ## Full 200k/floor forge run, logged under logs/
 	@mkdir -p "$(dir $(FULL_LOG))"
 	@echo "forge log: $(FULL_LOG)"
 	@bash -o pipefail -c '$(CARGO) run --release --bin wolf3d -- forge --iters $(ITERS) \
