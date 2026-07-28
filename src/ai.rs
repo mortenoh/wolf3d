@@ -1476,6 +1476,7 @@ pub fn evaluate_demo(demo: Demo) -> Option<TrialResult> {
 #[allow(clippy::too_many_arguments)]
 pub fn search_level(
     level_idx: usize,
+    label: &str,
     iters: u64,
     threads: usize,
     max_tics: u32,
@@ -1504,6 +1505,7 @@ pub fn search_level(
     let scatter = (iters * 4 / 5).max(1);
     run_scatter(
         level_idx,
+        label,
         scatter,
         threads,
         max_tics,
@@ -1521,6 +1523,7 @@ pub fn search_level(
     let climb = (iters - scatter).max(threads as u64);
     run_climb(
         level_idx,
+        label,
         climb,
         threads,
         max_tics,
@@ -1595,6 +1598,7 @@ fn live_cap(best_tics: &AtomicU64, max_tics: u32) -> u32 {
 #[allow(clippy::too_many_arguments)]
 fn run_scatter(
     level_idx: usize,
+    label: &str,
     iters: u64,
     threads: usize,
     max_tics: u32,
@@ -1644,6 +1648,7 @@ fn run_scatter(
                     consider_best(&best, &best_tics, &completed, result);
                     let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
                     maybe_progress(
+                        label,
                         n,
                         total_display,
                         progress_every,
@@ -1660,6 +1665,7 @@ fn run_scatter(
 #[allow(clippy::too_many_arguments)]
 fn run_climb(
     level_idx: usize,
+    label: &str,
     iters: u64,
     threads: usize,
     max_tics: u32,
@@ -1722,6 +1728,7 @@ fn run_climb(
                     consider_best(&best, &best_tics, &completed, result);
                     let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
                     maybe_progress(
+                        label,
                         n,
                         total_display,
                         progress_every,
@@ -1748,6 +1755,7 @@ fn search_trial_id(search_seed: u64, trial: u64) -> u64 {
 }
 
 fn maybe_progress(
+    label: &str,
     n: u64,
     total: u64,
     every: u64,
@@ -1761,23 +1769,25 @@ fn maybe_progress(
     let b = best.lock().unwrap();
     let done = completed.load(Ordering::Relaxed);
     let _ = (total, best_tics); // total is a budget hint only; workers may overshoot
+    // Every line names the floor: progress scrolls, so a one-shot header above
+    // it would scroll away and leave the reader guessing which map this is.
     if let Some(ref r) = *b {
         if r.completed {
-            eprintln!(
-                "\r  searching…  {n} trials  ·  {done} finished  ·  best score {}  ({} kills, {} secrets, {:.0}s play)   ",
+            println!(
+                "  {label}  searching…  {n} trials  ·  {done} finished  ·  best score {}  ({} kills, {} secrets, {:.0}s play)",
                 r.points(),
                 r.kills,
                 r.secrets,
                 r.tics as f32 / 70.0,
             );
         } else {
-            eprintln!(
-                "\r  searching…  {n} trials  ·  no finish yet  ·  best partial {} kills, {} secrets   ",
+            println!(
+                "  {label}  searching…  {n} trials  ·  no finish yet  ·  best partial {} kills, {} secrets",
                 r.kills, r.secrets
             );
         }
     } else {
-        eprintln!("\r  searching…  {n} trials  ·  no finish yet   ");
+        println!("  {label}  searching…  {n} trials  ·  no finish yet");
     }
 }
 
@@ -2314,7 +2324,7 @@ mod multi_goal_smoke {
 
     #[test]
     fn e1m1_secret_policy_activates_a_pushwall() {
-        let result = search_level(0, 50, 4, 70 * 180, 0, 1, None, false, SearchFocus::Secrets);
+        let result = search_level(0, "e1m1", 50, 4, 70 * 180, 0, 1, None, false, SearchFocus::Secrets);
         assert!(
             result.secrets >= 1,
             "secret-focused policy found {}/{} secrets",

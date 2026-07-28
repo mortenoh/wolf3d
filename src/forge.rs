@@ -104,9 +104,11 @@ pub fn run(mut opts: ForgeOptions) -> i32 {
     let mut sum_pickups = 0i64;
     let mut perfect = 0usize;
 
-    for &level_idx in &opts.levels {
+    let total_floors = opts.levels.len();
+    for (nth, &level_idx) in opts.levels.iter().enumerate() {
         let name = level_name(level_idx);
-        print!("{name}");
+        // Banner on its own line so it survives the scrolling progress below.
+        println!("=== {name}  (floor {} of {total_floors}) ===", nth + 1);
         let _ = std::io::stdout().flush();
         let t0 = Instant::now();
         match generate_one(
@@ -148,8 +150,7 @@ pub fn run(mut opts: ForgeOptions) -> i32 {
                 sum_pickups += i64::from(result.pickups);
 
                 // One clear block per floor — got vs map max, not "x/y ideal".
-                println!();
-                println!("  result     {tag}");
+                println!("  {name}  result     {tag}");
                 println!(
                     "  time       {:.1}s play  ({} tics)   search {:.1}s",
                     demo_tics as f32 / 70.0,
@@ -177,8 +178,10 @@ pub fn run(mut opts: ForgeOptions) -> i32 {
             }
             Err(e) => {
                 fail += 1;
-                println!();
-                println!("  result     failed  ({:.1}s)", t0.elapsed().as_secs_f32());
+                println!(
+                    "  {name}  result     FAILED  ({:.1}s)",
+                    t0.elapsed().as_secs_f32()
+                );
                 println!("  error      {e}");
                 println!();
             }
@@ -211,23 +214,22 @@ fn generate_one(
     god: bool,
     focus: SearchFocus,
 ) -> Result<(PathBuf, ai::TrialResult, WriteStatus), String> {
-    let path_out = out_dir.join(format!("{}.dm", level_name(level_idx)));
+    let name = level_name(level_idx);
+    let path_out = out_dir.join(format!("{}.dm", name));
 
     let warm = load_warm_start(level_idx, &path_out, god, focus);
     if let Some(ref w) = warm {
-        // Brief status on the same line, then a full block after search.
-        eprint!(
-            "  (warm: score {} · {} kills · {} secrets · {:.0}s) … searching",
+        println!(
+            "  {name}  warm start: score {} · {} kills · {} secrets · {:.0}s play",
             w.points(),
             w.kills,
             w.secrets,
             w.tics as f32 / 70.0
         );
-        let _ = std::io::stderr().flush();
     } else {
-        eprint!("  searching");
-        let _ = std::io::stderr().flush();
+        println!("  {name}  warm start: none (cold search)");
     }
+    let _ = std::io::stdout().flush();
 
     let mut game = Game::new(level_idx);
     let mut best = warm.clone().unwrap_or_else(|| {
@@ -240,6 +242,7 @@ fn generate_one(
 
     let searched = ai::search_level(
         level_idx,
+        &name,
         iters,
         threads,
         max_tics,
